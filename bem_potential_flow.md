@@ -20,6 +20,7 @@
 - [参考文献](#参考文献)
 - [Appendix](#appendix)
   - [A. 計算](#a-計算)
+  - [A-Eq2.6](#a-eq26)
     - [A-Eq3.9](#a-eq39)
     - [A-Eq3.14](#a-eq314)
   - [B. 理論的な背景](#b-理論的な背景)
@@ -306,6 +307,53 @@ $$\boldsymbol{v}(\boldsymbol{x}) = \frac{1}{2\pi} \sum_{j=1}^{N} \left( \left( q
 
 　本節では、本文で述べた一部の式について、これを整理・導出する過程を示す。
 
+### A-Eq2.6
+
+　式 $(2.6)$ を展開する。式 $(2.5)$, 式 $(3.4)$ を代入すると、以下のようになる。
+
+$$\begin{aligned}
+    c(\boldsymbol{x}) \phi(\boldsymbol{x}) &= \oint_{\Gamma} \left(G(\boldsymbol{x}, \boldsymbol{\xi}) \frac{\partial \phi(\boldsymbol{\xi})}{\partial n} - \phi(\boldsymbol{\xi}) \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n} \right) ds(\boldsymbol{\xi}) \\\
+    &= \sum_{j=1}^{N} \int_{\Gamma_j} \left( G(\boldsymbol{x}, \boldsymbol{\xi}) q_j - \phi_j \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n} \right) ds(\boldsymbol{\xi}) \\\
+    &= \sum_{j=1}^{N} \int_{\Gamma_j} \left( -\frac{q_j}{2\pi} \ln r + \phi_j \frac{\boldsymbol{r} \cdot \boldsymbol{n}}{2\pi r^2} \right) ds(\boldsymbol{\xi})
+\end{aligned} \qquad\text{(A26-1)}$$
+
+　この計算のため、相対ベクトル $\boldsymbol{r}$ を分解し、局所座標系 $s$ を導入する。線分要素 $\Gamma_j$ の単位接線ベクトルを $\boldsymbol{t}$、単位法線ベクトルを $\boldsymbol{n}$ とすれば, $\boldsymbol{r}$ は以下のように分解できる。
+
+$$\begin{aligned}
+    &\boldsymbol{r} = s \boldsymbol{t} + d \boldsymbol{n} \\\
+    & \text{where} \quad \left\lbrace \begin{aligned}
+        s &= \boldsymbol{r} \cdot \boldsymbol{t} \\\
+        d &= \boldsymbol{r} \cdot \boldsymbol{n}
+    \end{aligned} \right.
+\end{aligned} \qquad\text{(A26-2)}$$
+
+ここで, $d$ は観測点 $\boldsymbol{x}$ から線分要素 $\Gamma_j$ までの符号付最短距離であり, $s$ は線分要素上の局所座標である。したがって, $r = \sqrt{s^2 + d^2}$ となる。以降、積分変数を $ds(\boldsymbol{\xi}) = ds$ とし、線分の始点を $s = s_1$、終点を $s = s_2$ と表す。
+
+　これらを式 $\text{(A26-1)}$ に代入すると、要素 $\Gamma_j$ に関する積分は以下のように書き換えられる。
+
+$$\begin{aligned}
+    I_j &= \int_{\Gamma_j} \left( -\frac{q_j}{2\pi} \ln r + \phi_j \frac{\boldsymbol{r} \cdot \boldsymbol{n}}{2\pi r^2} \right) ds(\boldsymbol{\xi}) \\\
+    &= -\frac{q_j}{2\pi} \int_{s_1}^{s_2} \ln \sqrt{s^2 + d^2} ds + \frac{\phi_j}{2\pi} \int_{s_1}^{s_2} \frac{d}{s^2 + d^2} ds \\\
+\end{aligned} \qquad\text{(A26-3)}$$
+
+　これらの積分は、以下のように計算できる。
+
+$$\begin{aligned}
+    \int_{s_1}^{s_2} \ln \sqrt{s^2 + d^2} ds &= \frac{1}{2} \int_{s_1}^{s_2} \ln (s^2 + d^2) ds \\\
+    &= \frac{1}{2} \left[ s \ln (s^2 + d^2) - 2s + 2d \arctan \left( \frac{s}{d} \right) \right]_{s_1}^{s_2} \\\
+    &= \frac{s_2}{2} \ln r_2^2 - \frac{s_1}{2} \ln r_1^2 - (s_2 - s_1) + d \left( \arctan \frac{s_2}{d} - \arctan \frac{s_1}{d} \right) \\\
+    \int_{s_1}^{s_2} \frac{d}{s^2 + d^2} ds &= \left[ \arctan \left( \frac{s}{d} \right) \right]_{s_1}^{s_2} \\\
+    &= \arctan \frac{s_2}{d} - \arctan \frac{s_1}{d}
+\end{aligned}$$
+
+　以降, $\Delta\theta_j = \arctan \frac{s_2}{d} - \arctan \frac{s_1}{d}$ と表す。これらを式 $\text{(A26-3)}$ に代入すると、以下のようになる。この $I_j$ を全要素について合計することで、式 $(2.6)$ の右辺が得られる。
+
+$$\begin{aligned}
+    &I_j = -\frac{q_j}{2\pi} \left( \frac{s_2}{2} \ln r_2^2 - \frac{s_1}{2} \ln r_1^2 - (s_2 - s_1) \right) + \frac{\phi_j - q_j d}{2\pi} \Delta\theta_j \\\
+\end{aligned} \qquad\text{(A26-4)}$$
+
+> 実際のプログラムでは、`arctan2`関数を用いて $\Delta \theta_j$ を計算している。
+
 #### A-Eq3.9
 
 　式 $(3.9)$ の積分を計算する。
@@ -386,14 +434,7 @@ $$\begin{aligned}
 
 $$\boldsymbol{v}(\boldsymbol{x}) = \frac{1}{2\pi} \sum_{j=1}^{N} \left( q_j \int_{\Gamma_j} \frac{\boldsymbol{r}}{r^2} ds(\boldsymbol{\xi}) - \phi_j \int_{\Gamma_j} \frac{1}{r^2} \left( \boldsymbol{n} - \frac{2 (\boldsymbol{r} \cdot \boldsymbol{n})}{r^2} \boldsymbol{r} \right) ds(\boldsymbol{\xi}) \right) \qquad\text{(3.13)}$$
 
-　この計算のため、相対ベクトル $\boldsymbol{r}$ を分解し、局所座標系 $s$ を導入する。線分要素 $\Gamma_j$ の単位接線ベクトルを $\boldsymbol{t}$、単位法線ベクトルを $\boldsymbol{n}$ とすると, $\boldsymbol{r}$ は以下のように分解できる。
-
-$$\begin{aligned}
-    &\boldsymbol{r} = s \boldsymbol{t} + d \boldsymbol{n} \\\
-    &\text{where } \left\lbrace\begin{aligned} s &= \boldsymbol{r} \cdot \boldsymbol{t} \\\ d &= \boldsymbol{r} \cdot \boldsymbol{n} \end{aligned}\right.
-\end{aligned} \qquad\text{(A313-1)}$$
-
-このとき, $d$ は観測点 $\boldsymbol{x}$ から線分要素 $\Gamma_j$ までの符号付最短距離であり, $s$ は線分要素上の局所座標である。したがって, $r = \sqrt{s^2 + d^2}$ となる。以降、積分変数を $ds(\boldsymbol{\xi}) = ds$ とし、線分の始点を $s = s_1$、終点を $s = s_2$ と表す。
+　この計算のため、[A-Eq2.6](#a-eq26)と同様に、相対ベクトル $\boldsymbol{r}$ を分解し、局所座標系 $s$ を導入する。以降、積分変数を $ds(\boldsymbol{\xi}) = ds$ とし、線分の始点を $s = s_1$、終点を $s = s_2$ と表す。
 
 (1) $\int_{\Gamma_j} \frac{\boldsymbol{r}}{r^2} ds(\boldsymbol{\xi})$ の計算：
 

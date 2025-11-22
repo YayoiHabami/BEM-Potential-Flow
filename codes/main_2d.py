@@ -11,6 +11,7 @@ Classes
 - BoundaryConditions: 境界全体の情報と操作を提供するクラス
 - BEMPotentialFlow: 境界要素法による定常ポテンシャル流れ解析を行うクラス
 """
+import argparse
 from dataclasses import dataclass
 from enum import Enum, auto
 from time import perf_counter
@@ -442,6 +443,141 @@ class BEMPotentialFlow:
 
         self._is_solved = True
 
+    def _calculate_potential(self, points: np.ndarray) -> np.ndarray:
+        """
+        複数の内部点におけるポテンシャル値 φ(x, y) を計算する
+
+        Parameters
+        ----------
+        points : np.ndarray
+            内部点の座標リスト (M x 2)
+
+        Returns
+        -------
+        potentials : np.ndarray
+            内部点のポテンシャル値リスト (M,)
+
+        Notes
+        -----
+        - 点が境界外、または境界に極端に近い場合は np.nan を返す
+        - pointsは境界内部にあることを前提とする
+        """
+        # 次元を拡張する
+        # points: (M, 2) -> (M, 1, 2)
+        # segments (境界要素): (N, 2) -> (1, N, 2)
+        # (M, N, 2) の形状で全点 x 境界要素の組み合わせによる演算を行う
+        ps = points[:, np.newaxis, :]  # (M, 1, 2)
+
+        # 端点p1,p2を取得: (1, N, 2)
+        p1s_2d, p2s_2d = self.bcs.all_endpoints()
+        p1s = p1s_2d[np.newaxis, :, :]
+        p2s = p2s_2d[np.newaxis, :, :]
+
+        # 端点へのベクトルr1,r2を計算: (M, N, 2)
+        r1s = p1s - ps
+        r2s = p2s - ps
+        # 極端に境界に近い点は後でnanにする
+        sq_tol = (1e-3)**2  # 1単位を1mmとして1μmの距離
+        sq_r1s = np.sum(r1s**2, axis=2)  # |r1|^2 (M, N)
+        sq_r2s = np.sum(r2s**2, axis=2)  # |r2|^2 (M, N)
+        close_mask = (sq_r1s < sq_tol) | (sq_r2s < sq_tol)
+
+        # 接線ベクトルと法線ベクトルを取得: (1, N, 2)
+        ts = self.bcs.tangents()[np.newaxis, :, :]
+        ns = self.bcs.normals()[np.newaxis, :, :]
+
+        # 内積r・t, r・nを計算: (M, N)
+        s1s = np.sum(r1s * ts, axis=2)
+        s2s = np.sum(r2s * ts, axis=2)
+        ds = np.sum(r1s * ns, axis=2)
+
+        # ∠(p2s-point-p1s) を計算: (M, N)
+        theta1s = np.arctan2(r1s[:, :, 1], r1s[:, :, 0])
+        theta2s = np.arctan2(r2s[:, :, 1], r2s[:, :, 0])
+        angle_diffs = _normalize_angles(theta2s - theta1s)
+
+        # 境界値 q, φ を取得: (1, N)
+        qs = self.q_boundary[np.newaxis, :]
+        phis = self.phi_boundary[np.newaxis, :]
+
+        # ポテンシャル値の計算: (M, N)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            phi_spec = - qs * (s2s/2 * np.log(sq_r2s) - s1s/2 * np.log(sq_r1s) - (s2s - s1s)) \
+                     + (phis - qs * ds) * angle_diffs
+        phi = _INV_2PI * np.sum(phi_spec, axis=1)  # (M,)
+
+        # 極端に境界に近い点はnanにする
+        phi[close_mask.any(axis=1)] = np.nan
+        return phi
+
+    def calculate_potential(self, x: float, y: float) -> float:
+        """単一点のポテンシャル値 φ(x, y) を計算
+
+        Parameters
+        ----------
+        x : float
+            内部点のx座標
+        y : float
+            内部点のy座標
+
+        Returns
+        -------
+        phi : float
+            内部点のポテンシャル値
+
+        Notes
+        -----
+        - 点が境界外、または境界に極端に近い場合は np.nan を返す
+        """
+        if not self._is_solved:
+            raise RuntimeError("Boundary integral equation is not solved yet.")
+
+        # 内外判定
+        if not self._path.contains_point((x, y)):
+            return np.nan
+
+        point = np.array([[x, y]])  # (1, 2)
+        phi = self._calculate_potential(point)[0]
+        return phi
+
+    def calculate_potential_mesh(self, xx: np.ndarray, yy: np.ndarray) -> np.ndarray:
+        """格子点群におけるポテンシャル値 φ(x, y) を計算する
+
+        Parameters
+        ----------
+        xx : np.ndarray
+            格子点のx座標の2次元配列
+        yy : np.ndarray
+            格子点のy座標の2次元配列
+
+        Returns
+        -------
+        phi_mesh : np.ndarray
+            格子点のポテンシャル値の2次元配列
+        """
+        if not self._is_solved:
+            raise RuntimeError("Boundary integral equation is not solved yet.")
+
+        # 格子点を内部点リストに変換
+        points = np.column_stack((xx.ravel(), yy.ravel()))  # (M, 2)
+
+        # 内外判定マスクを作成
+        inside_mask = self._path.contains_points(points)  # (M,)
+        if not np.any(inside_mask):
+            # 全点が外部の場合、全てnanを返す
+            return np.full(xx.shape, np.nan)
+
+        # 内部点のみ抽出して計算
+        internal_points = points[inside_mask]  # (K, 2)
+        potentials_internal = self._calculate_potential(internal_points)  # (K,)
+
+        # 結果を元の格子形状に戻す
+        potentials = np.full(points.shape[0], np.nan)  # (M,)
+        potentials[inside_mask] = potentials_internal
+        phi_mesh = potentials.reshape(xx.shape)  # (grid_y, grid_x)
+
+        return phi_mesh
+
     def _calculate_velocity(self, points: np.ndarray) -> np.ndarray:
         """
         複数の内部点における速度ベクトルを計算する
@@ -606,11 +742,12 @@ class BEMPotentialFlow:
 # --- 描画関数 ---
 
 def _plot_result(xx: np.ndarray, yy: np.ndarray,
-                 uu: np.ndarray, vv: np.ndarray,
                  poly: np.ndarray,
+                 pp: Optional[np.ndarray] = None,
+                 uu_vv: Optional[tuple[np.ndarray, np.ndarray]] = None,
                  fluid_color: str = 'jet',
                  skip: int = 2) -> None:
-    """計算結果のプロット
+    """計算結果のプロット (ポテンシャル場と流線)
 
     Parameters
     ----------
@@ -618,13 +755,13 @@ def _plot_result(xx: np.ndarray, yy: np.ndarray,
         x座標グリッド (2D配列)
     yy : np.ndarray
         y座標グリッド (2D配列)
-    uu : np.ndarray
-        x方向速度成分グリッド (2D配列)
-    vv : np.ndarray
-        y方向速度成分グリッド (2D配列)
     poly : np.ndarray
         境界の頂点リスト ((N+1) x 2 配列)
         終点を含むこと (N+1番目の要素は最初の頂点と同じ点であること)
+    pp : Optional[np.ndarray], optional
+        ポテンシャル場グリッド (2D配列), by default None
+    uu_vv : Optional[tuple[np.ndarray, np.ndarray]], optional
+        x,y方向速度成分グリッドのタプル (uu, vv), by default None
     fluid_color : str, optional
         流体の色マップ (デフォルトは 'jet')
         'jet'以外が指定された場合は単色として扱う
@@ -634,45 +771,72 @@ def _plot_result(xx: np.ndarray, yy: np.ndarray,
 
     Notes
     -----
-    - `xx`, `yy`, `uu`, `vv` は同じサイズの2D配列であること
+    - `xx`, `yy` と `pp` または `uuvv` の中の配列は同じサイズの2D配列であること
     """
+    if pp is None and uu_vv is None:
+        print("Warning: No data to plot.")
+        return
+
+    num_plots = (1 if pp is not None else 0) + (1 if uu_vv is not None else 0)
+    plot_index = 1
+
     x_width = xx.max() - xx.min()
     y_width = yy.max() - yy.min()
+
+    fig_width = 10
     if x_width > y_width:
-        fig_size = (10, 10 * y_width / x_width)
+        fig_size = (fig_width, fig_width * num_plots * y_width / x_width)
     else:
-        fig_size = (10 * x_width / y_width, 10)
+        fig_size = (fig_width * x_width / y_width, fig_width * num_plots)
+
     plt.figure(figsize=fig_size)
 
+    # ポテンシャル場の描画
+    if pp is not None:
+        plt.subplot(num_plots, 1, plot_index)
+        plt.contourf(xx, yy, pp, cmap='jet', levels=50)
+        plt.plot(poly[:,0], poly[:,1], 'k-', linewidth=2, label='Boundary')
+        plt.title("Potential Field")
+        plt.xlabel("x")
+        plt.ylabel("y")
+        plt.axis('equal')
+        plt.colorbar(label='Potential')
+        plt.grid(True, linestyle=':', alpha=0.6)
+        plot_index += 1
+
     # 流線の描画
-    # nanを0に置換
-    uu = np.nan_to_num(uu, nan=0.0)
-    vv = np.nan_to_num(vv, nan=0.0)
-    color_map = None
-    color = fluid_color
-    if fluid_color == 'jet':
-        # 色づけのために速度の大きさを計算
-        speed = np.log(np.sqrt(uu**2 + vv**2) + 1)
-        color = speed
-        color_map = fluid_color
-    plt.streamplot(xx, yy, uu, vv, color=color,
-                   cmap=color_map, density=2, linewidth=2)
+    if uu_vv is not None:
+        uu, vv = uu_vv
+        plt.subplot(num_plots, 1, plot_index)
+        # nanを0に置換
+        uu = np.nan_to_num(uu, nan=0.0)
+        vv = np.nan_to_num(vv, nan=0.0)
+        color_map = None
+        color = fluid_color
+        if fluid_color == 'jet':
+            # 色づけのために速度の大きさを計算
+            speed = np.log(np.sqrt(uu**2 + vv**2) + 1)
+            color = speed
+            color_map = fluid_color
+        plt.streamplot(xx, yy, uu, vv, color=color,
+                       cmap=color_map, density=2, linewidth=2)
 
-    # 境界の描画
-    plt.plot(poly[:,0], poly[:,1], 'k-', linewidth=2, label='Boundary')
+        # 境界の描画
+        plt.plot(poly[:,0], poly[:,1], 'k-', linewidth=2, label='Boundary')
 
-    # ベクトル場（間引いて表示）
-    plt.quiver(xx[::skip, ::skip], yy[::skip, ::skip],
-            uu[::skip, ::skip], vv[::skip, ::skip],
-            scale=100, color='black', alpha=0.2)
+        # ベクトル場（間引いて表示）
+        plt.quiver(xx[::skip, ::skip], yy[::skip, ::skip],
+                uu[::skip, ::skip], vv[::skip, ::skip],
+                scale=100, color='black', alpha=0.2)
 
-    plt.title("Steady Potential Flow by Boundary Element Method (BEM)")
-    plt.xlabel("x")
-    plt.ylabel("y")
-    plt.axis('equal')
-    if fluid_color == 'jet':
-        plt.colorbar(label='Log Speed')
-    plt.grid(True, linestyle=':', alpha=0.6)
+        plt.title("Streamlines")
+        plt.xlabel("x")
+        plt.ylabel("y")
+        plt.axis('equal')
+        if fluid_color == 'jet':
+            plt.colorbar(label='Log Speed')
+        plt.grid(True, linestyle=':', alpha=0.6)
+
     plt.tight_layout()
     plt.show()
 
@@ -736,11 +900,32 @@ def _boundary_example_2():
     ]
     return BoundaryConditions(np.array(vertices), bc_list, max_length=0.1)
 
+def _parse_args():
+    """コマンドライン引数を解析する. 計算を行う必要がない場合にはquit()"""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ex", type=int, choices=[1, 2],
+                        default=1,
+                        help="境界条件の例番号 (1または2)")
+    parser.add_argument("--pot", action="store_true",
+                        help="ポテンシャル場を表示")
+    parser.add_argument("--vel", action="store_true",
+                        help="速度場を表示")
+    args = parser.parse_args()
+    if not args.pot and not args.vel:
+        print("Warning: At least one of --pot or --vel must be specified.")
+        quit()
+    return args
+
 def main():
     """メイン実行関数: 境界条件設定、計算、描画"""
+    args = _parse_args()
+
     print("Setting up boundary conditions and solving BEM...")
     start_time = perf_counter()
-    bcs = _boundary_example_2()
+    if args.ex == 1:
+        bcs = _boundary_example_1()
+    else:
+        bcs = _boundary_example_2()
     print(f"  -> Boundary conditions set up. ({perf_counter() - start_time:.2f} sec)")
 
     # 1. 境界積分方程式を解く
@@ -757,18 +942,31 @@ def main():
     xx, yy = np.meshgrid(x_range, y_range)
     total_points = xx.size
 
-    # 2.2 各点での速度ベクトル (u, v) を計算
-    print("Calculating internal velocity field...")
-    start_time = perf_counter()
-    uu, vv = bem.calculate_velocity_mesh(xx, yy)
-    total_time = perf_counter() - start_time
-    print(f"  -> Internal velocity field calculated. ({total_time:.2f} sec; "
+    # 2.2 各点でのポテンシャル値 φ を計算
+    pp = None
+    if args.pot:
+        print("Calculating internal potential field...")
+        start_time = perf_counter()
+        pp = bem.calculate_potential_mesh(xx, yy)
+        total_time = perf_counter() - start_time
+        print(f"  -> Internal potential field calculated. ({total_time:.2f} sec; "
+            f"{total_time / total_points * 1e3:.2f} ms/point)")
+
+    # 2.3 各点での速度ベクトル (u, v) を計算
+    uu_vv = None
+    if args.vel:
+        print("Calculating internal velocity field...")
+        start_time = perf_counter()
+        uu_vv = bem.calculate_velocity_mesh(xx, yy)
+        total_time = perf_counter() - start_time
+        print(f"  -> Internal velocity field calculated. ({total_time:.2f} sec; "
           f"{total_time / total_points * 1e3:.2f} ms/point)")
 
     # 3. 結果のプロット
     print("Plotting results...")
     skip = max(1, n_grids // 50)  # 最大50x50のベクトル表示
-    _plot_result(xx, yy, uu, vv, np.vstack([bcs.vertices, bcs.vertices[0]]), skip=skip)
+    _plot_result(xx, yy, np.vstack([bcs.vertices, bcs.vertices[0]]),
+                 pp = pp, uu_vv=uu_vv, skip=skip)
 
 if __name__ == "__main__":
     main()

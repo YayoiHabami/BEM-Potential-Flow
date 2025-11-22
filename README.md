@@ -30,17 +30,39 @@ pip install numpy matplotlib
 
 ### 2. シミュレーションの実行
 
-以下のコマンドを実行すると、main_2d.py 内で定義された形状と境界条件に基づいた解析が実行され、結果がプロットされます。
+以下のコマンドを実行すると、解析が実行され、結果がプロットされます。
 
 ```bash
-python codes/main_2d.py
+python codes/main_2d.py [オプション]
 ```
 
-実行すると、以下のような流れ場の可視化結果が表示されます。以下は`codes/main_2d.py`内の`_boundary_example_2`関数で定義された例の出力例です。
+　オプションとして、以下を指定できます。`--pot`および`--vel`の両方を指定しない場合、警告が表示されて終了します。`--pot`と`--vel`の両方を指定した場合、2つのグラフが並列して描画されます。また、`python codes/main_2d.py --help`でヘルプを表示できます。
+
+- `--ex {1,2}`: 境界条件の例番号を指定（デフォルト: 1）
+- `--pot`: ポテンシャル場を表示
+- `--vel`: 速度場を表示
+
+#### 実行例
+
+速度場のみを表示する場合:
+
+```bash
+python codes/main_2d.py --ex 2 --vel
+```
 
 <center><img src="img/flow_example_2.png" alt="Flow Example 2" width="800"/></center>
 
-<center><b>Fig. 1</b> 解析領域内の速度ベクトルの可視化例</center>
+<b>Fig. 1</b> 解析領域内の速度ベクトルの可視化例（例2）
+
+ポテンシャル場と速度場の両方を表示する場合:
+
+```bash
+python codes/main_2d.py --ex 2 --pot --vel
+```
+
+<center><img src="img/potential_velocity_example_1.png" alt="Potential and Velocity Example 1" width="800"/></center>
+
+<b>Fig. 2</b> 解析領域内のポテンシャル場と速度ベクトルの可視化例（例1）
 
 ## ファイル構成
 
