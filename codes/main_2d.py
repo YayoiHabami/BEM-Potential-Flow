@@ -102,6 +102,8 @@ class BoundaryConditions:
                  max_length: Optional[float] = None):
         self.vertices: np.ndarray
         """2次元頂点リスト (N x 2)"""
+        self._original_vertices: Optional[np.ndarray] = None
+        """元の頂点リスト、分割していない場合はNone"""
         self.conditions: list[BoundaryCondition]
         """境界条件リスト (BoundaryConditionのリスト)"""
 
@@ -113,6 +115,14 @@ class BoundaryConditions:
         self._lengths: np.ndarray
         """各要素の長さ"""
         self._init_geometry()
+
+    def original_vertices(self) -> np.ndarray:
+        """元の頂点リストを返す"""
+        if self._original_vertices is not None:
+            return self._original_vertices
+
+        # 分割していない場合は現在の頂点を返す
+        return self.vertices
 
     def count(self) -> int:
         """境界要素の数を返す"""
@@ -257,6 +267,7 @@ class BoundaryConditions:
             self.vertices = vertices
             self.conditions = conditions
             return
+        self._original_vertices = vertices.copy()
         new_vertices = []
         new_conditions = []
         n = vertices.shape[0]
@@ -347,7 +358,7 @@ class BEMPotentialFlow:
         """
         # 境界条件を設定
         self.bcs = bcs
-        self._path = Path(self.bcs.vertices)
+        self._path = Path(self.bcs.original_vertices())
         self._is_solved = False
 
         n = self.bcs.count()
@@ -846,6 +857,67 @@ def _plot_result(xx: np.ndarray, yy: np.ndarray,
 # エイリアス定義
 _BT = BoundaryType
 _BC = BoundaryCondition
+_VERTEX = tuple[float, float]
+_VERTICES = list[_VERTEX]
+
+def _get_boundary_conditions(outer_vertices: _VERTICES,
+                             io_values: dict[tuple[_VERTEX, _VERTEX], float],
+                             max_length: Optional[float] = None
+                             ) -> BoundaryConditions:
+    """境界条件オブジェクトを作成するユーティリティ関数
+
+    Parameters
+    ----------
+    vertices : _VERTICES
+        境界の頂点リスト (反時計回り)
+    io_values : dict[tuple[_VERTEX, _VERTEX], float]
+        Dirichlet境界条件を指定する辞書.
+        キーは (x1, y1), (x2, y2) のタプルで境界要素の端点座標を表す.
+        値はその境界要素に対応するDirichlet条件の値を表す.
+        ここで指定した要素以外はNeumann条件 (q=0) として扱う.
+    max_length : Optional[float], optional
+        境界要素の最大長さ (デフォルトは None, 指定しない場合は分割しない)
+
+    Returns
+    -------
+    bc_obj : BoundaryConditions
+        境界条件オブジェクト
+
+    Raises
+    ------
+    ValueError
+        指定された境界要素が頂点リストに存在しない場合
+    """
+    n = len(outer_vertices)
+    conditions = []
+    o_verts = np.array(outer_vertices)
+
+    # io_valuesのキーを検索しやすい形式に変換
+    # (x1, y1, x2, y2) -> frozenset({(x1, y1), (x2, y2)})
+    # これにより、(p1, p2) と (p2, p1) を同じキーとして扱える
+    io_map = {frozenset({k[0], k[1]}): v for k, v in io_values.items()}
+
+    # 各辺の境界条件を決定
+    for i in range(n):
+        p1 = tuple(o_verts[i])
+        p2 = tuple(o_verts[(i + 1) % n])
+        segment_key = frozenset({p1, p2})
+
+        if segment_key in io_map:
+            # io_valuesに指定された辺はDirichlet条件
+            conditions.append(_BC(_BT.DIRICHLET, io_map[segment_key]))
+        else:
+            # それ以外はNeumann条件 (壁)
+            conditions.append(_BC(_BT.NEUMANN, 0.0))
+
+    # 整合性チェック: io_valuesで指定された辺がすべて使われたか
+    used_keys = {frozenset({tuple(o_verts[i]), tuple(o_verts[(i + 1) % n])}) for i in range(n)}
+    for key in io_map:
+        if key not in used_keys:
+            p1, p2 = tuple(key)
+            raise ValueError(f"Boundary segment {p1} -> {p2} from io_values not found in vertices list.")
+
+    return BoundaryConditions(o_verts, conditions, max_length)
 
 def _boundary_example_1():
     """コの字型パイプの境界条件例"""
@@ -879,26 +951,15 @@ def _boundary_example_2():
         (0, 2), (1, 2), (1, 1), (1, 0), (2, 0), (2, 1), (3, 1), (4, 0),
         (6, 0), (6, 1), (5, 1), (4, 3), (3, 3), (2.5, 2), (2, 2), (1, 3), (0, 3)
     ]
-    bc_list = [
-        _BC(_BT.NEUMANN,    0.0),  #  0
-        _BC(_BT.NEUMANN,    0.0),  #  1
-        _BC(_BT.NEUMANN,    0.0),  #  2
-        _BC(_BT.DIRICHLET, -1.0),  #  3 (流入部)
-        _BC(_BT.NEUMANN,    0.0),  #  4
-        _BC(_BT.NEUMANN,    0.0),  #  5
-        _BC(_BT.NEUMANN,    0.0),  #  6
-        _BC(_BT.NEUMANN,    0.0),  #  7
-        _BC(_BT.DIRICHLET, -1.0),  #  8 (流入部)
-        _BC(_BT.NEUMANN,    0.0),  #  9
-        _BC(_BT.NEUMANN,    0.0),  # 10
-        _BC(_BT.NEUMANN,    0.0),  # 11
-        _BC(_BT.NEUMANN,    0.0),  # 12
-        _BC(_BT.NEUMANN,    0.0),  # 13
-        _BC(_BT.NEUMANN,    0.0),  # 14
-        _BC(_BT.NEUMANN,    0.0),  # 15
-        _BC(_BT.DIRICHLET,  2.0),  # 16 (流出部)
-    ]
-    return BoundaryConditions(np.array(vertices), bc_list, max_length=0.1)
+    return _get_boundary_conditions(
+        vertices,
+        io_values = {
+            ((1, 0), (2, 0)): -1.0,  # (1,0)->(2,0) 流入部
+            ((6, 0), (6, 1)): -1.0,  # (6,0)->(6,1) 流入部
+            ((0, 3), (0, 2)):  2.0   # (0,3)->(0,2) 流出部
+        },
+        max_length=0.1
+    )
 
 def _parse_args():
     """コマンドライン引数を解析する. 計算を行う必要がない場合にはquit()"""
