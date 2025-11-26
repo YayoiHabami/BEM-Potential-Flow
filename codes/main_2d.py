@@ -102,37 +102,123 @@ class BoundaryConditions:
                  max_length: Optional[float] = None):
         self.vertices: np.ndarray
         """2次元頂点リスト (N x 2)"""
-        self._original_vertices: Optional[np.ndarray] = None
-        """元の頂点リスト、分割していない場合はNone"""
         self.conditions: list[BoundaryCondition]
         """境界条件リスト (BoundaryConditionのリスト)"""
+        self._path = Path(vertices)
+        """ポリゴンの外部境界のPathオブジェクト（境界判定用）"""
+        self._max_length = max_length
+        """境界要素の最大長さ（細分割のため）"""
 
-        self._segmentation(vertices, conditions, max_length)
+        self.inner_vertices: dict[int, np.ndarray] = {}
+        """内部ポリゴンの頂点リスト (それぞれ N_i x 2). キーはポリゴンID"""
+        self.inner_conditions: dict[int, list[BoundaryCondition]] = {}
+        """内部ポリゴンの境界条件リスト (それぞれ BoundaryConditionのリスト). キーはポリゴンID"""
+        self._inner_paths: dict[int, Path] = {}
+        """内部ポリゴンのPathオブジェクト（境界判定用）. キーはポリゴンID"""
+        self._max_inner_id: int = 0
+        """内部ポリゴンの最大ID. 新規追加時にインクリメントされる"""
+
+        self.vertices, self.conditions = self._segmentation(
+                vertices, conditions, max_length)
         self.validate()
 
-        self._normals: np.ndarray
+        self._normals: np.ndarray = np.array([])
         """各要素の法線ベクトル"""
-        self._lengths: np.ndarray
+        self._lengths: np.ndarray = np.array([])
         """各要素の長さ"""
-        self._init_geometry()
 
-    def original_vertices(self) -> np.ndarray:
-        """元の頂点リストを返す"""
-        if self._original_vertices is not None:
-            return self._original_vertices
+    def set_inner_polygon(self, inner_vertices: np.ndarray) -> int:
+        """内部ポリゴンを設定する
 
-        # 分割していない場合は現在の頂点を返す
-        return self.vertices
+        Parameters
+        ----------
+        inner_vertices : np.ndarray
+            内部ポリゴンの頂点リスト (M x 2)
+
+        Returns
+        -------
+        index : int
+            追加された内部ポリゴンのID
+
+        Raises
+        ------
+        ValueError
+            内部ポリゴンが外部境界の外にある場合
+
+        Notes
+        -----
+        - 内部境界はすべてNeumann条件 (法線速度0) として扱われる.
+        """
+        inner_path = Path(inner_vertices)
+        if not self._contains_polygon(inner_path):
+            raise ValueError("Inner polygon must be inside the outer boundary.")
+
+        inner_id = self._max_inner_id
+        self._inner_paths[inner_id] = inner_path
+
+        # すべてNeumann条件 (法線速度0) とする
+        conditions = [BoundaryCondition(BoundaryType.NEUMANN, 0.0)
+                      for _ in range(inner_vertices.shape[0])]
+        vert, cond = self._segmentation(inner_vertices, conditions, self._max_length)
+        self.inner_vertices[inner_id] = vert
+        self.inner_conditions[inner_id] = cond
+        self._max_inner_id += 1
+
+        return inner_id
+
+    def remove_inner_polygon(self, inner_id: int) -> None:
+        """内部ポリゴンを削除する
+
+        Parameters
+        ----------
+        inner_id : int
+            削除する内部ポリゴンのID
+        """
+        if inner_id in self._inner_paths:
+            del self._inner_paths[inner_id]
+            del self.inner_vertices[inner_id]
+            del self.inner_conditions[inner_id]
+
+    def _contains_polygon(self, polygon: Path) -> bool:
+        """ポリゴンが外部境界の内側にあるか判定する
+
+        Parameters
+        ----------
+        polygon : Path
+            判定するポリゴン
+        """
+        # 外部境界に含まれるか
+        if not self._path.contains_path(polygon):
+            return False
+
+        # 各内部ポリゴンと交差しないか
+        for inner_path in self._inner_paths.values():
+            if polygon.intersects_path(inner_path):
+                return False
+
+        return True
 
     def count(self) -> int:
         """境界要素の数を返す"""
         return self.vertices.shape[0]
+    def total_count(self) -> int:
+        """内部境界を含む全境界要素の数を返す"""
+        total = self.count()
+        for cond in self.inner_conditions.values():
+            total += len(cond)
+        return total
+
+    def all_conditions(self) -> list[BoundaryCondition]:
+        """全要素の境界条件を返す"""
+        all_conditions = self.conditions.copy()
+        for cond in self.inner_conditions.values():
+            all_conditions.extend(cond)
+        return all_conditions
 
     def endpoints(self, index: int) -> tuple[np.ndarray, np.ndarray]:
         """指定した要素の端点を返す"""
-        p1 = self.vertices[index]
-        p2 = self.vertices[(index + 1) % self.count()] # 次の頂点（最後は最初に戻る）
-        return p1, p2
+        p1s, p2s = self.all_endpoints()
+        return p1s[index], p2s[index]
     def all_endpoints(self) -> tuple[np.ndarray, np.ndarray]:
         """全要素の端点を返す
 
@@ -141,8 +227,19 @@ class BoundaryConditions:
         np.ndarray, np.ndarray
             n個の始点と終点のリスト
         """
-        p1s = self.vertices
-        p2s = np.roll(self.vertices, -1, axis=0)
+        p1s = np.zeros((self.total_count(), 2), dtype=self.vertices.dtype)
+        p2s = np.zeros((self.total_count(), 2), dtype=self.vertices.dtype)
+
+        p1s[:self.count(), :] = self.vertices
+        p2s[:self.count(), :] = np.roll(self.vertices, -1, axis=0)
+
+        offset = self.count()
+        for inner_vert in self.inner_vertices.values():
+            n_inner = inner_vert.shape[0]
+            p1s[offset:offset+n_inner, :] = inner_vert
+            p2s[offset:offset+n_inner, :] = np.roll(inner_vert, -1, axis=0)
+            offset += n_inner
+
         return p1s, p2s
 
     def midpoint(self, index: int) -> np.ndarray:
@@ -158,8 +255,11 @@ class BoundaryConditions:
         midpoint : np.ndarray
             セグメントの中点座標 (x, y)
         """
-        p1, p2 = self.endpoints(index)
-        return (p1 + p2) / 2.0
+        return self.midpoints()[index]
+    def midpoints(self) -> np.ndarray:
+        """全セグメントの中点を返す"""
+        p1s, p2s = self.all_endpoints()
+        return (p1s + p2s) / 2.0
 
     def normal(self, index: int) -> np.ndarray:
         """指定したインデックスのセグメントの法線ベクトルを返す
@@ -174,9 +274,23 @@ class BoundaryConditions:
         normal : np.ndarray
             セグメントの法線ベクトル (nx, ny) (単位ベクトル)
         """
-        return self._normals[index]
+        return self.normals()[index]
     def normals(self) -> np.ndarray:
         """全セグメントの法線ベクトルを返す"""
+        if self._normals.size > 0:
+            return self._normals
+
+        # 未初期化の場合は計算する
+        p1s, p2s = self.all_endpoints()
+        dxs = p2s[:, 0] - p1s[:, 0]
+        dys = p2s[:, 1] - p1s[:, 1]
+        lengths = np.sqrt(dxs**2 + dys**2)
+
+        # 法線ベクトルは (dx, dy) を-90°回転させたもの
+        # 外部境界の場合は外向き法線、内部境界の場合は内向き法線になる
+        self._normals = np.zeros_like(p1s)
+        self._normals[:, 0] = dys / lengths
+        self._normals[:, 1] = -dxs / lengths
         return self._normals
 
     def tangent(self, index: int) -> np.ndarray:
@@ -192,13 +306,10 @@ class BoundaryConditions:
         tangent : np.ndarray
             セグメントの接線ベクトル (tx, ty) (単位ベクトル)
         """
-        n = self._normals[index]
-        # 接線ベクトルは法線ベクトルを90度回転させたもの
-        t = np.array([-n[1], n[0]])
-        return t
+        return self.tangents()[index]
     def tangents(self) -> np.ndarray:
         """全セグメントの接線ベクトルを返す"""
-        normals = self._normals
+        normals = self.normals()
         tangents = np.zeros_like(normals)
         tangents[:, 0] = -normals[:, 1]
         tangents[:, 1] = normals[:, 0]
@@ -217,9 +328,17 @@ class BoundaryConditions:
         length : float
             セグメントの長さ
         """
-        return self._lengths[index]
+        return self.lengths()[index]
     def lengths(self) -> np.ndarray:
         """全セグメントの長さを返す"""
+        if self._lengths.size > 0:
+            return self._lengths
+
+        # 未初期化の場合は計算する
+        p1s, p2s = self.all_endpoints()
+        dxs = p2s[:, 0] - p1s[:, 0]
+        dys = p2s[:, 1] - p1s[:, 1]
+        self._lengths = np.sqrt(dxs**2 + dys**2)
         return self._lengths
 
     def aabb(self) -> tuple[float, float, float, float]:
@@ -242,6 +361,45 @@ class BoundaryConditions:
         max_y = np.max(self.vertices[:, 1])
         return min_x, max_x, min_y, max_y
 
+    def contains_point(self, xy: tuple[float, float]) -> bool:
+        """点が境界内部にあるか判定する
+
+        Parameters
+        ----------
+        xy : tuple of float
+            判定する点の座標 (x, y)
+
+        Returns
+        -------
+        is_inside : bool
+            点が境界内部にある場合はTrue、外部にある場合はFalse
+        """
+        if not self._path.contains_point(xy):
+            # 外部境界の外ならFalse
+            return False
+        for inner_path in self._inner_paths.values():
+            # 内部ポリゴンの内側ならFalse
+            if inner_path.contains_point(xy):
+                return False
+        return True
+    def contains_points(self, xys: np.ndarray) -> np.ndarray:
+        """複数の点が境界内部にあるか判定する
+
+        Parameters
+        ----------
+        xys : np.ndarray
+            判定する点の座標リスト (M x 2)
+
+        Returns
+        -------
+        is_inside : np.ndarray
+            各点が境界内部にある場合はTrue、外部にある場合はFalseの配列 (M,)
+        """
+        is_inside = self._path.contains_points(xys)
+        for inner_path in self._inner_paths.values():
+            is_inside &= ~inner_path.contains_points(xys)
+        return is_inside
+
     def validate(self):
         """verticesとconditionsの整合性チェック"""
         # もしverticesが空ならスキップ
@@ -261,13 +419,27 @@ class BoundaryConditions:
     def _segmentation(
             self, vertices: np.ndarray,
             conditions: list[BoundaryCondition],
-            max_length: Optional[float] = None):
-        """境界の細分割処理"""
+            max_length: Optional[float] = None) -> tuple[np.ndarray, list[BoundaryCondition]]:
+        """境界の細分割処理
+
+        Parameters
+        ----------
+        vertices : np.ndarray
+            元の頂点リスト (N x 2)
+        conditions : list of BoundaryCondition
+            元の境界条件リスト (BoundaryConditionのリスト)
+        max_length : float, optional
+            境界要素の最大長さ（細分割のため）
+
+        Returns
+        -------
+        new_vertices : np.ndarray
+            細分割後の頂点リスト (N' x 2; N' >= N)
+        new_conditions : list of BoundaryCondition
+            細分割後の境界条件リスト
+        """
         if max_length is None:
-            self.vertices = vertices
-            self.conditions = conditions
-            return
-        self._original_vertices = vertices.copy()
+            return vertices, conditions
         new_vertices = []
         new_conditions = []
         n = vertices.shape[0]
@@ -290,31 +462,9 @@ class BoundaryConditions:
                 new_vertices.append(new_point)
                 new_conditions.append(cond)
 
-        self.vertices = np.array(new_vertices)
-        self.conditions = new_conditions
+        return np.array(new_vertices), new_conditions
 
-    def _init_geometry(self):
-        """各要素の中点、法線、長さを計算"""
-        n = self.count()
-        self._normals = np.zeros((n, 2))
-        self._lengths = np.zeros(n)
 
-        for i in range(n):
-            p1 = self.vertices[i]
-            p2 = self.vertices[(i + 1) % n] # 次の頂点（最後は最初に戻る）
-
-            # ベクトルと長さ
-            dx = p2[0] - p1[0]
-            dy = p2[1] - p1[1]
-            length = np.sqrt(dx**2 + dy**2)
-            self._lengths[i] = length
-
-            # 法線ベクトル（反時計回りなら (dy, -dx) が外向き法線）
-            #   法線ベクトル（進行方向に対して右側を外向きとする定義が多いが、
-            #   ここでは反時計回りなら「右側＝内側」「左側＝外側」。
-            #   一般的なBEMでは外向き法線を使う。
-            #   反時計回りの場合、(dx, dy) -> (dy, -dx) が外向き法線
-            self._normals[i] = np.array([dy, -dx]) / length
 
 class BEMPotentialFlow:
     """境界要素法による定常ポテンシャル流れ解析
@@ -322,28 +472,26 @@ class BEMPotentialFlow:
     以下の手順で計算を行う:
     1. 境界条件の設定 (BoundaryConditionsオブジェクトの作成)
     2. 1で作成したオブジェクトを使用し、本クラスを初期化
-    3. `calculate_velocity()` または `calculate_velocity_mesh()` メソッドで
-       内部点の速度ベクトルを計算
+    3. 内部点のポテンシャル計算: calculate_potentialまたはcalculate_potential_meshを呼び出す.
+       内部点の速度ベクトル計算: calculate_velocityまたはcalculate_velocity_meshを呼び出す.
     """
 
     def __init__(self, bcs: BoundaryConditions):
         self.bcs: BoundaryConditions
         """境界条件オブジェクト"""
-        self._path: Path
-        """ポリゴンのPathオブジェクト（境界判定用）"""
         self._is_solved: bool
         """境界積分方程式が解かれたかどうかのフラグ"""
 
         self.phi_boundary: np.ndarray
-        """境界上のポテンシャル値 φ"""
+        """境界上のポテンシャル値 φ; (N,) (Nは内部境界を含む全境界要素数)"""
         self.q_boundary: np.ndarray
-        """境界上の法線方向速度 q = dφ/dn"""
+        """境界上の法線方向速度 q = dφ/dn; (N,) (Nは内部境界を含む全境界要素数)"""
 
         # φとqの方程式の係数H,G
         self._H: np.ndarray
-        """境界積分方程式の係数行列 H"""
+        """境界積分方程式の係数行列 H; (N x N) (Nは内部境界を含む全境界要素数)"""
         self._G: np.ndarray
-        """境界積分方程式の係数行列 G"""
+        """境界積分方程式の係数行列 G; (N x N) (Nは内部境界を含む全境界要素数)"""
 
         # 境界条件を設定して境界積分方程式を解く
         self.setup(bcs)
@@ -358,13 +506,10 @@ class BEMPotentialFlow:
         """
         # 境界条件を設定
         self.bcs = bcs
-        self._path = Path(self.bcs.original_vertices())
         self._is_solved = False
 
-        n = self.bcs.count()
-
-        self.phi_boundary = np.zeros(n)
-        self.q_boundary = np.zeros(n)
+        self.phi_boundary = np.zeros(self.bcs.total_count())
+        self.q_boundary   = np.zeros(self.bcs.total_count())
 
         # 境界積分方程式を解く
         self._init_boundary_integrals()
@@ -372,9 +517,41 @@ class BEMPotentialFlow:
 
     def _init_boundary_integrals(self) -> None:
         """境界積分方程式の係数行列 H, G を初期化する"""
-        n = self.bcs.count()
+        n = self.bcs.total_count()
         self._H = np.zeros((n, n))
         self._G = np.zeros((n, n))
+
+        # 次元を拡張する: (Nは内部境界を含む全境界要素数)
+        # ξ: (N, 2) -> (N, 1, 2) : 観測点 (セグメント中点)
+        xis = self.bcs.midpoints()[:, np.newaxis, :]
+        # p1, p2: (N, 2) -> (1, N, 2)
+        p1s_2d, p2s_2d = self.bcs.all_endpoints()
+        p1s = p1s_2d[np.newaxis, :, :]
+        p2s = p2s_2d[np.newaxis, :, :]
+
+        # r1, r2: (N, N, 2)
+        r1s = p1s - xis
+        r2s = p2s - xis
+
+        # H_ij: ∂G/∂n = -1/(2π r^2) * (r・n) の積分
+        alpha1s = np.arctan2(r1s[:, :, 1], r1s[:, :, 0])
+        alpha2s = np.arctan2(r2s[:, :, 1], r2s[:, :, 0])
+        angle_diffs = _normalize_angles(alpha2s - alpha1s)
+        self._H = - _INV_2PI * angle_diffs
+
+        # 局所座標 t1s, t2s の計算 : (1, N, 2)
+        ts = self.bcs.tangents()[np.newaxis, :, :]
+        ns = self.bcs.normals()[np.newaxis, :, :]
+        t1s = np.sum(r1s * ts, axis=2)
+        t2s = np.sum(r2s * ts, axis=2)
+
+        # G_ij: G = -1/(2π)*ln(r) の積分
+        log_norm_r1s = np.log(np.linalg.norm(r1s, axis=2))
+        log_norm_r2s = np.log(np.linalg.norm(r2s, axis=2))
+        ds = np.sum(r1s * ns, axis=2)
+        self._G = _INV_2PI * (
+            + t1s * log_norm_r1s - t2s * log_norm_r2s + (t2s - t1s)
+            - ds * angle_diffs)
 
         # 対角成分 (i==j) の計算
         # --> H_ii = c(xi) = 1/2
@@ -383,46 +560,14 @@ class BEMPotentialFlow:
         g_diag = self.bcs.lengths() / (2*np.pi) * (1 - np.log(self.bcs.lengths()/2))
         self._G[np.arange(n), np.arange(n)] = g_diag
 
-        for i in range(n): # 観測点 i
-            xi = self.bcs.midpoint(i)
-
-            # 対角要素を取得
-            h_ii = self._H[i, i]
-            g_ii = self._G[i, i]
-
-            # 各要素の端点
-            p1s, p2s = self.bcs.all_endpoints()
-
-            # H_ij: ∂G/∂n = -1/(2π r^2) * (r・n) の積分
-            alpha1s = np.arctan2(p1s[:,1] - xi[1], p1s[:,0] - xi[0])
-            alpha2s = np.arctan2(p2s[:,1] - xi[1], p2s[:,0] - xi[0])
-            angle_diffs = _normalize_angles(alpha2s - alpha1s)
-            self._H[i, :] = - _INV_2PI * angle_diffs
-            self._H[i, i] = h_ii  # 対角成分を元に戻す
-
-            # 局所座標 t1s, t2s の計算
-            tangents = self.bcs.tangents()
-            # r・t の計算
-            r1s = p1s - xi
-            r2s = p2s - xi
-            t1s = np.sum(r1s * tangents, axis=1, keepdims=False)
-            t2s = np.sum(r2s * tangents, axis=1, keepdims=False)
-
-            # G_ij: G = -1/(2π)*ln(r) の積分
-            norm_r1s = np.linalg.norm(r1s, axis=1, keepdims=False)
-            norm_r2s = np.linalg.norm(r2s, axis=1, keepdims=False)
-            ds = np.sum(r1s * self.bcs.normals(), axis=1, keepdims=False)
-            self._G[i, :] = _INV_2PI * (
-                + t1s * np.log(norm_r1s) - t2s * np.log(norm_r2s) + (t2s - t1s)
-                - ds * angle_diffs)
-            self._G[i, i] = g_ii  # 対角成分を元に戻す
-
     def _solve(self) -> None:
         """境界積分方程式を解く (境界におけるポテンシャル値 φ と法線方向速度 q を求める)"""
         # 連立方程式 Ax = b の構築
-        A = np.zeros((self.bcs.count(), self.bcs.count()))
-        b = np.zeros(self.bcs.count())
-        for j, cond in enumerate(self.bcs.conditions):
+        A = np.zeros_like(self._H)
+        b = np.zeros(self.bcs.total_count())
+        conditions = self.bcs.all_conditions()
+
+        for j, cond in enumerate(conditions):
             if cond.boundary_type == BoundaryType.NEUMANN: # q (流速) が既知, φ が未知
                 # 左辺: H[i,j]*φ_j -> A[i,j] = H[i,j]
                 # 右辺: G[i,j]*q_known
@@ -444,7 +589,7 @@ class BEMPotentialFlow:
             x, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
 
         # 解の割り当て
-        for j, cond in enumerate(self.bcs.conditions):
+        for j, cond in enumerate(conditions):
             if cond.boundary_type == BoundaryType.NEUMANN:
                 self.phi_boundary[j] = x[j]
                 self.q_boundary[j] = cond.value
@@ -475,7 +620,7 @@ class BEMPotentialFlow:
         """
         # 次元を拡張する
         # points: (M, 2) -> (M, 1, 2)
-        # segments (境界要素): (N, 2) -> (1, N, 2)
+        # segments (境界要素): (N, 2) -> (1, N, 2) : (Nは内部境界を含む全境界要素数)
         # (M, N, 2) の形状で全点 x 境界要素の組み合わせによる演算を行う
         ps = points[:, np.newaxis, :]  # (M, 1, 2)
 
@@ -544,7 +689,7 @@ class BEMPotentialFlow:
             raise RuntimeError("Boundary integral equation is not solved yet.")
 
         # 内外判定
-        if not self._path.contains_point((x, y)):
+        if not self.bcs.contains_point((x, y)):
             return np.nan
 
         point = np.array([[x, y]])  # (1, 2)
@@ -573,7 +718,7 @@ class BEMPotentialFlow:
         points = np.column_stack((xx.ravel(), yy.ravel()))  # (M, 2)
 
         # 内外判定マスクを作成
-        inside_mask = self._path.contains_points(points)  # (M,)
+        inside_mask = self.bcs.contains_points(points)  # (M,)
         if not np.any(inside_mask):
             # 全点が外部の場合、全てnanを返す
             return np.full(xx.shape, np.nan)
@@ -689,7 +834,7 @@ class BEMPotentialFlow:
         point = np.array([x, y])
 
         # ポリゴン外判定
-        if not self._path.contains_point((x, y)):
+        if not self.bcs.contains_point((x, y)):
             return np.nan, np.nan
 
         velocity = self._calculate_velocity(point[np.newaxis, :])  # (1, 2)
@@ -729,7 +874,7 @@ class BEMPotentialFlow:
         points = np.column_stack((xx.ravel(), yy.ravel()))
 
         # ポリゴン内部の点のみ抽出
-        is_inside = self._path.contains_points(points)
+        is_inside = self.bcs.contains_points(points)
 
         if not np.any(is_inside):
             # 全て外部点の場合はnanを返す
@@ -754,6 +899,7 @@ class BEMPotentialFlow:
 
 def _plot_result(xx: np.ndarray, yy: np.ndarray,
                  poly: np.ndarray,
+                 inner_polys: Optional[list[np.ndarray]] = None,
                  pp: Optional[np.ndarray] = None,
                  uu_vv: Optional[tuple[np.ndarray, np.ndarray]] = None,
                  fluid_color: str = 'jet',
@@ -769,6 +915,9 @@ def _plot_result(xx: np.ndarray, yy: np.ndarray,
     poly : np.ndarray
         境界の頂点リスト ((N+1) x 2 配列)
         終点を含むこと (N+1番目の要素は最初の頂点と同じ点であること)
+    inner_polys : Optional[list[np.ndarray]], optional
+        内部の穴の頂点リストのリスト ((M+1) x 2 配列), by default None
+        各ポリゴンは終点を含むこと
     pp : Optional[np.ndarray], optional
         ポテンシャル場グリッド (2D配列), by default None
     uu_vv : Optional[tuple[np.ndarray, np.ndarray]], optional
@@ -806,7 +955,13 @@ def _plot_result(xx: np.ndarray, yy: np.ndarray,
     if pp is not None:
         plt.subplot(num_plots, 1, plot_index)
         plt.contourf(xx, yy, pp, cmap='jet', levels=50)
+
+        # 境界の描画
         plt.plot(poly[:,0], poly[:,1], 'k-', linewidth=2, label='Boundary')
+        if inner_polys is not None:
+            for inner_poly in inner_polys:
+                plt.plot(inner_poly[:,0], inner_poly[:,1], 'k-', linewidth=2)
+
         plt.title("Potential Field")
         plt.xlabel("x")
         plt.ylabel("y")
@@ -834,6 +989,9 @@ def _plot_result(xx: np.ndarray, yy: np.ndarray,
 
         # 境界の描画
         plt.plot(poly[:,0], poly[:,1], 'k-', linewidth=2, label='Boundary')
+        if inner_polys is not None:
+            for inner_poly in inner_polys:
+                plt.plot(inner_poly[:,0], inner_poly[:,1], 'k-', linewidth=2)
 
         # ベクトル場（間引いて表示）
         plt.quiver(xx[::skip, ::skip], yy[::skip, ::skip],
@@ -862,6 +1020,7 @@ _VERTICES = list[_VERTEX]
 
 def _get_boundary_conditions(outer_vertices: _VERTICES,
                              io_values: dict[tuple[_VERTEX, _VERTEX], float],
+                             inner_vertices: Optional[list[_VERTICES]] = None,
                              max_length: Optional[float] = None
                              ) -> BoundaryConditions:
     """境界条件オブジェクトを作成するユーティリティ関数
@@ -875,6 +1034,9 @@ def _get_boundary_conditions(outer_vertices: _VERTICES,
         キーは (x1, y1), (x2, y2) のタプルで境界要素の端点座標を表す.
         値はその境界要素に対応するDirichlet条件の値を表す.
         ここで指定した要素以外はNeumann条件 (q=0) として扱う.
+    inner_vertices : Optional[list[_VERTICES]], optional
+        内部の穴の頂点リストのリスト (時計回り).
+        デフォルトは None (穴なし).
     max_length : Optional[float], optional
         境界要素の最大長さ (デフォルトは None, 指定しない場合は分割しない)
 
@@ -917,12 +1079,24 @@ def _get_boundary_conditions(outer_vertices: _VERTICES,
             p1, p2 = tuple(key)
             raise ValueError(f"Boundary segment {p1} -> {p2} from io_values not found in vertices list.")
 
-    return BoundaryConditions(o_verts, conditions, max_length)
+    bcs = BoundaryConditions(o_verts, conditions, max_length)
+    if inner_vertices is None:
+        return bcs
+
+    # 内部の穴がある場合の処理
+    for hole_verts in inner_vertices:
+        i_verts = np.array(hole_verts)
+        try:
+            bcs.set_inner_polygon(i_verts)
+        except ValueError as e:
+            raise ValueError(f"Error in inner polygon with vertices {hole_verts}") from e
+    return bcs
 
 def _boundary_example_1():
     """コの字型パイプの境界条件例"""
     # 形状定義（矩形水槽の中に障害物があるような単純な形状、あるいはパイプ）
-    # ここでは単純な「コ」の字型パイプを定義（反時計回り）
+    # ここでは単純な「コ」の字型パイプを定義
+    # 法線ベクトルを外向きにするため、頂点は反時計回りに指定
     vertices = [
         (0, 0), (5, 0), (5, 2), (3, 2),
         (3, 1), (2, 1), (2, 2), (0, 2)
@@ -936,7 +1110,7 @@ def _boundary_example_1():
     bc_list = [
         _BC(_BT.NEUMANN,    0.0),  # 0: (0,0)->(5,0) 底面 (壁)
         _BC(_BT.NEUMANN,    0.0),  # 1: (5,0)->(5,2) 右面 (壁)
-        _BC(_BT.DIRICHLET, -1.0),  # 2: (5,2)->(3,2) 上面右 (流入)
+        _BC(_BT.DIRICHLET,  0.0),  # 2: (5,2)->(3,2) 上面右 (流入)
         _BC(_BT.NEUMANN,    0.0),  # 3: (3,2)->(3,1) 凹み右 (壁)
         _BC(_BT.NEUMANN,    0.0),  # 4: (3,1)->(2,1) 凹み底 (壁)
         _BC(_BT.NEUMANN,    0.0),  # 5: (2,1)->(2,2) 凹み左 (壁)
@@ -947,26 +1121,53 @@ def _boundary_example_1():
 
 def _boundary_example_2():
     """複雑な形状の境界条件例"""
+    # 外部形状定義
     vertices = [
         (0, 2), (1, 2), (1, 1), (1, 0), (2, 0), (2, 1), (3, 1), (4, 0),
         (6, 0), (6, 1), (5, 1), (4, 3), (3, 3), (2.5, 2), (2, 2), (1, 3), (0, 3)
     ]
+
     return _get_boundary_conditions(
         vertices,
         io_values = {
-            ((1, 0), (2, 0)): -1.0,  # (1,0)->(2,0) 流入部
-            ((6, 0), (6, 1)): -1.0,  # (6,0)->(6,1) 流入部
-            ((0, 3), (0, 2)):  2.0   # (0,3)->(0,2) 流出部
+            ((1, 0), (2, 0)):  0.0,  # (1,0)->(2,0) 流入部
+            ((6, 0), (6, 1)):  0.0,  # (6,0)->(6,1) 流入部
+            ((0, 3), (0, 2)):  1.0   # (0,3)->(0,2) 流出部
         },
+        max_length=0.1
+    )
+
+def _boundary_example_3():
+    """内部に境界をもつ形状の境界条件例"""
+    # 外部形状定義
+    # 法線ベクトルを外向きにするため、頂点は反時計回りに指定
+    vertices: _VERTICES = [
+        (2, 0), (8, 0), (10, 2), (10, 4), (8, 6), (2, 6), (0, 4), (0, 2)
+    ]
+
+    # 内部境界を定義
+    # 法線ベクトルを内向きにするため、頂点は時計回りに指定
+    inner_vertices: list[_VERTICES] = [
+        [(1, 3), (2.5, 4.5), (4, 3), (2.5, 1.5)],  # ひし形
+        [(4, 0.5), (4, 1.5), (6, 1.5), (6, 3.5), (7, 3.5), (7, 0.5)]  # L字型
+    ]
+
+    return _get_boundary_conditions(
+        vertices,
+        io_values = {
+            ((0, 2), (0, 4)):   0.0,  # (0,2)->(0,4) 流入部
+            ((10, 4), (10, 2)): 1.0   # (10,4)->(10,2) 流出部
+        },
+        inner_vertices=inner_vertices,
         max_length=0.1
     )
 
 def _parse_args():
     """コマンドライン引数を解析する. 計算を行う必要がない場合にはquit()"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ex", type=int, choices=[1, 2],
+    parser.add_argument("--ex", type=int, choices=[1, 2, 3],
                         default=1,
-                        help="境界条件の例番号 (1または2)")
+                        help="境界条件の例番号")
     parser.add_argument("--pot", action="store_true",
                         help="ポテンシャル場を表示")
     parser.add_argument("--vel", action="store_true",
@@ -985,8 +1186,12 @@ def main():
     start_time = perf_counter()
     if args.ex == 1:
         bcs = _boundary_example_1()
-    else:
+    elif args.ex == 2:
         bcs = _boundary_example_2()
+    elif args.ex == 3:
+        bcs = _boundary_example_3()
+    else:
+        raise ValueError("Invalid example number.")
     print(f"  -> Boundary conditions set up. ({perf_counter() - start_time:.2f} sec)")
 
     # 1. 境界積分方程式を解く
@@ -1023,11 +1228,16 @@ def main():
         print(f"  -> Internal velocity field calculated. ({total_time:.2f} sec; "
           f"{total_time / total_points * 1e3:.2f} ms/point)")
 
+    # 内部に境界があればそのポリゴンも準備
+    inner_polys = None
+    if bcs.inner_vertices:
+        inner_polys = [np.vstack([poly, poly[0]]) for poly in bcs.inner_vertices.values()]
+
     # 3. 結果のプロット
     print("Plotting results...")
     skip = max(1, n_grids // 50)  # 最大50x50のベクトル表示
     _plot_result(xx, yy, np.vstack([bcs.vertices, bcs.vertices[0]]),
-                 pp = pp, uu_vv=uu_vv, skip=skip)
+                 pp = pp, uu_vv=uu_vv, skip=skip, inner_polys=inner_polys)
 
 if __name__ == "__main__":
     main()

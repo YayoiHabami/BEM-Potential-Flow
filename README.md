@@ -44,7 +44,7 @@ python codes/main_2d.py [オプション]
 
 #### 実行例
 
-速度場のみを表示する場合:
+速度場のみを表示する場合 (`codes/main_2d.py/_boundary_example_2`):
 
 ```bash
 python codes/main_2d.py --ex 2 --vel
@@ -54,15 +54,27 @@ python codes/main_2d.py --ex 2 --vel
 
 <b>Fig. 1</b> 解析領域内の速度ベクトルの可視化例（例2）
 
-ポテンシャル場と速度場の両方を表示する場合:
+ポテンシャル場と速度場の両方を表示する場合 (`codes/main_2d.py/_boundary_example_1`):
 
 ```bash
-python codes/main_2d.py --ex 2 --pot --vel
+python codes/main_2d.py --ex 1 --pot --vel
 ```
 
 <center><img src="img/potential_velocity_example_1.png" alt="Potential and Velocity Example 1" width="800"/></center>
 
 <b>Fig. 2</b> 解析領域内のポテンシャル場と速度ベクトルの可視化例（例1）
+
+内部にも境界を持つ形状の例 (`codes/main_2d.py/_boundary_example_3`):
+
+```bash
+python codes/main_2d.py --ex 3 --pot --vel
+```
+
+<center><img src="img/potential_velocity_example_3.png" alt="Potential and Velocity Example 3" width="800"/></center>
+
+<b>Fig. 3</b> 内部に境界を持つ形状の解析例（例3）
+
+![](img/2025-11-26-13-46-54.png)
 
 ## ファイル構成
 
