@@ -20,9 +20,9 @@
 - [参考文献](#参考文献)
 - [Appendix](#appendix)
   - [A. 計算](#a-計算)
-  - [A-Eq2.6](#a-eq26)
-    - [A-Eq3.9](#a-eq39)
-    - [A-Eq3.14](#a-eq314)
+    - [A-Eq3.7](#a-eq37)
+    - [A-Eq3.10](#a-eq310)
+    - [A-Eq3.15](#a-eq315)
   - [B. 理論的な背景](#b-理論的な背景)
     - [B.1 ポテンシャル流れにおけるナビエ–ストークス方程式の簡略化](#b1-ポテンシャル流れにおけるナビエストークス方程式の簡略化)
 
@@ -68,6 +68,10 @@ $$\boldsymbol{v} = \nabla \phi \qquad\text{(1.1)}$$
 
 　**境界要素法**（BEM: Boundary Element Method）は、境界上の情報のみを用いて領域内部の物理量を計算する数値解析手法である。有限要素法（FEM）や有限差分法（FDM）といった他の主要な数値解析手法が領域全体を離散化（メッシュ化）するのに対し、BEMは**境界のみ**を離散化する点に特徴がある。
 
+<img src="img/FEMvsFDMvsBEM.svg" alt="FEM vs FDM vs BEM" width="600"/>
+
+**図 1.1** : FEM, FDM, BEMの比較（イメージ図）
+
 　BEMの主な利点は以下の通りである。
 
 1. **計算コストの削減**：解析対象の次元を1つ減らすことができる。例えば、2次元領域の解析では境界が1次元となるため、計算コストが大幅に削減される。
@@ -91,32 +95,40 @@ $$\nabla^2 \phi = \frac{\partial^2 \phi}{\partial x^2} + \frac{\partial^2 \phi}{
 
 　閉曲線境界 $\Gamma$ 上での条件を設定する。閉曲線によって区切られた、流体が存在する側を内部、その補集合を外部として、境界上の外向き法線ベクトルを $\boldsymbol{n}$ とする。境界の一部を**開口部**とし、そこでは流体の出入りがあるものとする。その他の部分は**壁面**であり、流体は壁を貫通しない。
 
-**開口部**：流体の出入りがある辺では、法線方向の速度成分を既知とする。
+**開口部**：流体の出入りがある辺では、法線方向の速度成分を既知とする。図 2.1 (a), (b) に示すように、流体領域へと流入する部分では $V_{\text{in/out}} < 0$、流体領域から流出する部分では $V_{\text{in/out}} > 0$ となる。すなわち、
 
 $$\frac{\partial \phi}{\partial n} = \boldsymbol{v} \cdot \boldsymbol{n} = V_{\text{in/out}} \qquad\text{(2.2)}$$
 
 ここで, $V_{\text{in/out}}$ は既知の値である（流入なら負、流出なら正など、法線の向きの定義に依存する）。
 
-**壁面**：壁面では流体が壁を突き抜けないため、法線方向の速度成分はゼロである。
+**壁面**：壁面では流体が壁を突き抜けないため、法線方向の速度成分はゼロである (式 $(2.3)$)。このとき、図 2.1 (c) に示すように、流れは壁を「滑る」形となる。[節1.2](#12-ポテンシャル流れとは)で述べたように、ポテンシャル流れでは粘性の影響が無視されるため、壁面での滑りなし条件（壁面において速度ベクトルがゼロとなる条件）は課されない。
 
 $$\frac{\partial \phi}{\partial n} = \boldsymbol{v} \cdot \boldsymbol{n} = 0 \qquad\text{(2.3)}$$
 
-　非圧縮性流体では、質量保存則により、閉じた領域への総流入量と総流出量は一致しなければならない。すなわち、
+<img src="img/boundary_conditions_Vio.svg" alt="Boundary Conditions; a: inlet; b: outlet; c: wall" width="650"/>
+
+**図 2.1** : 点 $\boldsymbol{\xi}$ における境界条件と流れのイメージ
+
+　また、流体では連続の式（質量保存則）により、閉じた領域への総流入量と総流出量は一致しなければならない。ポテンシャル流れでは流体は非圧縮であるため、全境界での流入体積流量と流出体積流量の和はゼロとなる。すなわち、
 
 $$\int_{\Gamma} \frac{\partial \phi}{\partial n} ds = 0 \qquad\text{(2.4)}$$
 
 が成り立つ。
 
-　また、内部境界を設ける場合、その法線ベクトルはその境界が囲う領域の内側を向くように定義する。このとき、流体領域は外部境界に内包され、内部境界の外側に位置する領域となる。内部境界が定義されている場合、境界要素 $\Gamma_i$ は外部境界と内部境界のどちらかに属するものとする。
+　**内部境界** $\Gamma_{\text{inner}}$ を設ける場合、その法線ベクトルはその境界が囲う領域の内側を向くように定義する。このとき、流体領域は外部境界 $\Gamma_{\text{outer}}$ に内包され、内部境界の外側に位置する領域となる。内部境界が定義されている場合、境界要素 $\Gamma_i$ は外部境界と内部境界のどちらかに属するものとする。
 
-> **注**：本プログラムでは、開口部では速度ポテンシャル $\phi$ の値を指定し（ディリクレ条件）、壁面では法線速度成分 $\partial \phi / \partial n$ を指定する（ノイマン条件）形で境界条件を設定する。
+<img src="img/inner_outer_normals.svg" alt="Normal Vectors on Inner and Outer Boundaries" width="400"/>
+
+**図 2.2** : 内部境界と外部境界における法線ベクトルの向き
+
+> **注**：本プログラムでは、開口部では速度ポテンシャル $\phi$ の値を指定し（ディリクレ条件）、壁面では法線速度成分 $\partial \phi / \partial n$ を指定する（ノイマン条件）形で境界条件を設定する。開口部において既知である $V_{\text{in/out}}$ は、指定されたポテンシャル値から計算されるため、プログラム上では明示的に示さない。
 >
 > 例えば $(0, 0)-(1, 0)-(1, 1)-(0, 1)$ の四角形領域において、左辺を入口、右辺を出口、上辺と下辺を壁面とする場合、境界条件は以下のように設定される。ポテンシャルの値 $\phi$ は任意の値を設定可能であるが、一般には入口を $0$, 出口を正の値に設定することが多い。
 > - 入口（左辺）: $\phi = 0$ （ディリクレ条件）
 > - 出口（右辺）: $\phi = 1$ （ディリクレ条件）
 > - 上辺および下辺（壁面）: $\frac{\partial \phi}{\partial n} = 0$ （ノイマン条件）
 >
-> このとき、1つでもディリクレ条件を設定すれば、式 (2.4) は自動的に満たされるため、特に考慮する必要はない。また、内部境界等において、全てを壁面として扱う場合も同様である。
+> このとき、1つでもディリクレ条件を設定すれば式 (2.4) は自動的に満たされるため、特に考慮する必要はない。また、内部境界等において、全てを壁面として扱う場合も同様である。すべてノイマン条件で境界条件を設定する場合は、各線分において $(長さ \times 指定した値) の和がゼロとなるように注意する必要がある。
 
 ### 2.3 境界積分方程式による解析
 
@@ -205,11 +217,19 @@ $$\begin{aligned}
     &= \frac{1}{2\pi r^2} \left( \boldsymbol{n} - \frac{2 (\boldsymbol{r} \cdot \boldsymbol{n})}{r^2} \boldsymbol{r} \right)
 \end{aligned} \qquad\text{(3.6)}$$
 
+　このとき、式 $(2.5)$, 式 $(3.4)$ を利用すると、内部点 $\boldsymbol{x}$ におけるポテンシャル値 $\phi(\boldsymbol{x})$ の式 $(2.6)$ は以下のように書ける。詳細な計算は[補遺A](#a-eq37)を参照のこと。
+
+$$c(\boldsymbol{x})\phi(\boldsymbol{x}) = \frac{1}{2\pi}\sum_{j=1}^{N}\left(-q_j \left( \frac{s_2}{2} \ln r_2^2 - \frac{s_1}{2} \ln r_1^2 - (s_2 - s_1) \right) + (\phi_j - q_j d) \Delta\theta_j \right) \qquad\text{(3.7)}$$
+
+ここで、点 $\boldsymbol{x}$ から線分要素 $\Gamma_j$ の各端点へ向かうベクトルを $\boldsymbol{r}_1, \boldsymbol{r}_2$ とし、その大きさを $r_1 = \|\boldsymbol{r}_1\|, r_2 = \|\boldsymbol{r}_2\|$ と表す。また、線分要素 $\Gamma_j$ における単位接線ベクトルを $\boldsymbol{t}$ としたとき, $s_i = \boldsymbol{r}_i \cdot \boldsymbol{t},\ d = \boldsymbol{r}_i \cdot \boldsymbol{n} \ (i = 1, 2)$ である。さらに, $\Delta \theta_j$ は点 $\boldsymbol{x}$ から見た線分要素 $\Gamma_j$ の両端点に対する角度差であり, $\Delta\theta_j = \arctan \frac{s_2}{d} - \arctan \frac{s_1}{d}$ として定義される。
+
+> プログラム上では、角度差 $\Delta \theta_j$ は `arctan2` 関数を用いて計算され, $(-\pi, \pi]$ の範囲に正規化される。
+
 ### 3.2 境界積分方程式の離散化
 
 　本節では、境界積分方程式 $(2.6)$ を離散化し、連立一次方程式 $A\mathbf{x} = \mathbf{b}$ の形に変換する手順を説明する。本稿では、閉曲線 $\Gamma$ を $N$ 個の線分要素 $\Gamma_j \ (j = 1, 2, \ldots, N)$ に分割し、各要素 $\Gamma_j$ 上でポテンシャル $\phi$ と流速 $q = \partial \phi / \partial n$ を一定と仮定する。これにより、境界上の未知量を有限個の値で近似できる。
 
-$$\phi(\boldsymbol{\xi}) \approx \phi_j, \quad q(\boldsymbol{\xi}) \approx q_j, \quad \left( \boldsymbol{\xi} \in \Gamma_j \right) \qquad\text{(3.7)}$$
+$$\phi(\boldsymbol{\xi}) \approx \phi_j, \quad \frac{\partial \phi}{\partial n}(\boldsymbol{\xi}) = q(\boldsymbol{\xi}) \approx q_j, \quad \left( \boldsymbol{\xi} \in \Gamma_j \right) \qquad\text{(3.8)}$$
 
 　以降、各要素の中点を $\boldsymbol{\xi}_j$、各要素の長さを $l_j$ と表す。中点 $\boldsymbol{\xi}_j$ における境界積分方程式 $(2.6)$ は, $\phi$ の項を左側に, $q$ の項を右側に移項すると以下のように書ける。
 
@@ -217,20 +237,20 @@ $$\begin{aligned}
     &\quad c(\boldsymbol{\xi}_i) \phi(\boldsymbol{\xi}_i) + \oint_{\Gamma} \phi(\boldsymbol{\xi}) \frac{\partial G(\boldsymbol{\xi}_i, \boldsymbol{\xi})}{\partial n} ds(\boldsymbol{\xi}) = \oint_{\Gamma} G(\boldsymbol{\xi}_i, \boldsymbol{\xi}) q(\boldsymbol{\xi}) ds(\boldsymbol{\xi}) \\\
     &\Rightarrow c(\boldsymbol{\xi}_i) \phi_i + \sum_{j=1}^{N} \phi_j \int_{\Gamma_j} \frac{\partial G(\boldsymbol{\xi}_i, \boldsymbol{\xi})}{\partial n} ds(\boldsymbol{\xi}) = \sum_{j=1}^{N} q_j \int_{\Gamma_j} G(\boldsymbol{\xi}_i, \boldsymbol{\xi}) ds(\boldsymbol{\xi})
     &\Rightarrow \sum_{j=1}^{N} H_{ij} \phi_j = \sum_{j=1}^{N} G_{ij} q_j
-\end{aligned} \qquad\text{(3.8)}$$
+\end{aligned} \qquad\text{(3.9)}$$
 
-ここで、行列要素 $H_{ij}$ と $G_{ij}$ は、クロネッカーのデルタ $\delta_{ij}$ を用いて以下のように定義される。この計算の詳細は、[付録A](#a-eq39)を参照されたい。
+ここで、行列要素 $H_{ij}$ と $G_{ij}$ は、クロネッカーのデルタ $\delta_{ij}$ を用いて以下のように定義される。この計算の詳細は、[補遺A](#a-eq310)を参照されたい。
 
 $$\begin{aligned}
     H_{ij} &= \int_{\Gamma_j} \frac{\partial G(\boldsymbol{\xi}_i, \boldsymbol{\xi})}{\partial n} ds(\boldsymbol{\xi}) + \delta_{ij} c(\boldsymbol{\xi}_i) \\\
     &= \int_{\Gamma_j} \left( -\frac{\boldsymbol{r} \cdot \boldsymbol{n}}{2\pi r^2} \right) ds(\boldsymbol{\xi}) + \delta_{ij} c(\boldsymbol{\xi}_i) \\\
     G_{ij} &= \int_{\Gamma_j} G(\boldsymbol{\xi}_i, \boldsymbol{\xi}) ds(\boldsymbol{\xi}) \\\
     &= \int_{\Gamma_j} \left( -\frac{1}{2\pi} \ln r \right) ds(\boldsymbol{\xi})
-\end{aligned} \qquad\text{(3.9)}$$
+\end{aligned} \qquad\text{(3.10)}$$
 
 > ただし、前述のように線分として境界を近似しているため、境界上の点 $\boldsymbol{\xi} _j$ について位置ベクトル $\boldsymbol{r}$ と法線ベクトル $\boldsymbol{n}$ は直交する。したがって, $\boldsymbol{r} \cdot \boldsymbol{n} = 0$ となるから, $H _{ii} = c(\boldsymbol{\xi}_i) = 1/2$ となる。
 
-　式 $(3.8)$ は, $i = 1, 2, \ldots, N$ について連立させることで、以下の行列方程式として表される。
+　式 $(3.9)$ は, $i = 1, 2, \ldots, N$ について連立させることで、以下の行列方程式として表される。
 
 $$\begin{bmatrix}
     H_{11} & H_{12} & \cdots & H_{1N} \\\
@@ -249,13 +269,13 @@ $$\begin{bmatrix}
   \end{bmatrix}
   \begin{bmatrix}
     q_1 \\\ q_2 \\\ \vdots \\\ q_N
-\end{bmatrix} \qquad\text{(3.10)}$$
+\end{bmatrix} \qquad\text{(3.11)}$$
 
-　[節2.2](#22-境界条件の設定)で説明したように、各要素 $\Gamma_j$ において, $\phi_j$ または $q_j$ のどちらかが指定されるため、式 $(3.10)$ は未知量に関する連立一次方程式として解くことができる。このとき、既知の値を右辺にベクトル $\mathbf{b}$ としてまとめ、未知量を左辺にベクトル $\mathbf{x}$ としてまとめることで、以下の形に変換できる。
+　[節2.2](#22-境界条件の設定)で説明したように、各要素 $\Gamma_j$ において, $\phi_j$ または $q_j$ のどちらかが指定されるため、式 $(3.11)$ は未知量に関する連立一次方程式として解くことができる。このとき、既知の値を右辺にベクトル $\mathbf{b}$ としてまとめ、未知量を左辺にベクトル $\mathbf{x}$ としてまとめることで、以下の形に変換できる。
 
-$$A \mathbf{x} = \mathbf{b} \qquad\text{(3.11)}$$
+$$A \mathbf{x} = \mathbf{b} \qquad\text{(3.12)}$$
 
-**具体例**：境界 $\Gamma$ が4つの要素 $\Gamma_1, \Gamma_2, \Gamma_3, \Gamma_4$ に分割されており, $\Gamma_1$ と $\Gamma_3$ でポテンシャル $\phi$ が指定され, $\Gamma_2$ と $\Gamma_4$ で流速 $q$ が指定されている場合を考える。このとき、式 $(3.10)$ から、以下のように連立方程式を構築できる。ただし、区別のため、既知の変数には添え字 "k" を付ける。また, $H_{ij}$ と $G_{ij}$ については、いずれも既に計算されているものとする。
+**具体例**：境界 $\Gamma$ が4つの要素 $\Gamma_1, \Gamma_2, \Gamma_3, \Gamma_4$ に分割されており, $\Gamma_1$ と $\Gamma_3$ でポテンシャル $\phi$ が指定され, $\Gamma_2$ と $\Gamma_4$ で流速 $q$ が指定されている場合を考える。このとき、式 $(3.11)$ から、以下のように連立方程式を構築できる。ただし、区別のため、既知の変数には添え字 "k" を付ける。また, $H_{ij}$ と $G_{ij}$ については、いずれも既に計算されているものとする。
 
 $$\begin{bmatrix}
   H_{11} & H_{12} & H_{13} & H_{14} \\\
@@ -288,7 +308,15 @@ $$\Rightarrow \begin{bmatrix}
     - H_{21} \phi_{1,k} + G_{22} q_{2,k} - H_{23} \phi_{3,k} + G_{24} q_{4,k} \\\
     - H_{31} \phi_{1,k} + G_{32} q_{2,k} - H_{33} \phi_{3,k} + G_{34} q_{4,k} \\\
     - H_{41} \phi_{1,k} + G_{42} q_{2,k} - H_{43} \phi_{3,k} + G_{44} q_{4,k}
-\end{bmatrix} \qquad\text{(3.12)}$$
+\end{bmatrix} \qquad\text{(3.13)}$$
+
+　この例は一般に、四角形領域の2辺 ($\Gamma_1, \Gamma_3$) を開口部、残りの2辺 ($\Gamma_2, \Gamma_4$) を壁面として設定した場合に対応する（図 3.1）。このとき $q_{2,k} = q_{4,k} = 0$ に設定され、また例えば $\phi_{1,k} = 0$ および $\phi_{3,k} > 0$ に設定される。このように設定された連立方程式を解くことで、線分 $\Gamma_1$ から線分 $\Gamma_4$ へ向かう流れが計算される。
+
+<img src="img/boundary_integral_eq_example.svg" alt="Trapezoidal Boundary Example" width="400"/>
+
+**図 3.1** : 台形領域における各線分要素の境界条件の設定例
+
+> 上のように1辺を1つの線分要素 $\Gamma_j$ として設定する場合、往々にして一辺が長くなるため、計算精度が低下する。より高い精度を得るためには、各辺を複数の線分要素に分割することが望ましい。プログラムでは、境界条件設定時に最大の線分長さを指定することで、自動的に要素分割を行っている。この場合、形状指定で与えた線分の数よりも、実際に使用される線分要素 $\Gamma_j$ の数は多くなる可能性がある。
 
 ### 3.3 内部点での速度ベクトルの計算
 
@@ -300,11 +328,15 @@ $$\begin{aligned}
     &= \frac{1}{2\pi} \sum_{j=1}^{N} \left( q_j \int_{\Gamma_j} \frac{\boldsymbol{r}}{r^2} ds(\boldsymbol{\xi}) - \phi_j \int_{\Gamma_j} \frac{1}{r^2} \left( \boldsymbol{n} - \frac{2 (\boldsymbol{r} \cdot \boldsymbol{n})}{r^2} \boldsymbol{r} \right) ds(\boldsymbol{\xi}) \right)
 \end{aligned} \qquad\text{(3.13)}$$
 
-　したがって、速度ベクトル $\boldsymbol{v}(\boldsymbol{x})$ は、上の式に現れる2つの積分を計算することで求められる。線分要素 $\Gamma_j$ の単位接線ベクトルを $\boldsymbol{t}$, 単位法線ベクトルを $\boldsymbol{n}$, 要素の両端点へのベクトルを $\boldsymbol{r}_1, \boldsymbol{r}_2$ と表す。これらを用いて、上の2つの積分は以下のように計算できる。導出の詳細は、[付録A](#a-eq314)を参照されたい。
+　したがって、速度ベクトル $\boldsymbol{v}(\boldsymbol{x})$ は、上の式に現れる2つの積分を計算することで求められる。線分要素 $\Gamma_j$ の単位接線ベクトルを $\boldsymbol{t}$, 単位法線ベクトルを $\boldsymbol{n}$, 要素の両端点へのベクトルを $\boldsymbol{r}_1, \boldsymbol{r}_2$ と表す。これらを用いて、上の2つの積分は以下のように計算できる。導出の詳細は、[補遺A](#a-eq315)を参照されたい。
 
-$$\boldsymbol{v}(\boldsymbol{x}) = \frac{1}{2\pi} \sum_{j=1}^{N} \left( \left( q_j \ln \frac{r_2}{r_1} - \phi_j \left( \frac{d}{r_2^2} - \frac{d}{r_1^2} \right) \right) \boldsymbol{t} + \left( q_j (\theta_2 - \theta_1) - \phi_j \left( -\frac{s_2}{r_2^2} + \frac{s_1}{r_1^2} \right) \right) \boldsymbol{n} \right) \qquad\text{(3.14)}$$
+$$\boldsymbol{v}(\boldsymbol{x}) = \frac{1}{2\pi} \sum_{j=1}^{N} \left( \left( q_j \ln \frac{r_2}{r_1} - \phi_j \left( \frac{d}{r_2^2} - \frac{d}{r_1^2} \right) \right) \boldsymbol{t} + \left( q_j (\theta_2 - \theta_1) - \phi_j \left( -\frac{s_2}{r_2^2} + \frac{s_1}{r_1^2} \right) \right) \boldsymbol{n} \right) \qquad\text{(3.15)}$$
 
 ここで, $s_1 = \boldsymbol{r}_1 \cdot \boldsymbol{t}$, $s_2 = \boldsymbol{r}_2 \cdot \boldsymbol{t}$, および $d = \boldsymbol{r}_1 \cdot \boldsymbol{n} = \boldsymbol{r}_2 \cdot \boldsymbol{n}$ である。
+
+> プログラムでは、要素の両端点の座標を $(x_{j1}, y_{j1}), (x_{j2}, y_{j2})$、観測点の座標を $(x_i, y_i)$ として、以下のように計算できる。この差分 $(\alpha_2 - \alpha_1)$ を $[-\pi, \pi]$ の範囲に正規化し、上の式に代入することで $H_{ij}$ を求める。
+>
+> $$\begin{aligned}\alpha_1 &= \text{atan2}(y_{j1} - y_i, x_{j1} - x_i) \\\ \alpha_2 &= \text{atan2}(y_{j2} - y_i, x_{j2} - x_i)\end{aligned}$$
 
 ## 参考文献
 
@@ -316,7 +348,7 @@ $$\boldsymbol{v}(\boldsymbol{x}) = \frac{1}{2\pi} \sum_{j=1}^{N} \left( \left( q
 
 　本節では、本文で述べた一部の式について、これを整理・導出する過程を示す。
 
-### A-Eq2.6
+#### A-Eq3.7
 
 　式 $(2.6)$ を展開する。式 $(2.5)$, 式 $(3.4)$ を代入すると、以下のようになる。
 
@@ -363,20 +395,20 @@ $$\begin{aligned}
 
 > 実際のプログラムでは、`arctan2`関数を用いて $\Delta \theta_j$ を計算している。
 
-#### A-Eq3.9
+#### A-Eq3.10
 
-　式 $(3.9)$ の積分を計算する。
+　式 $(3.10)$ の積分を計算する。
 
 $$\begin{aligned}
     H_{ij} &= \int_{\Gamma_j} \left( -\frac{\boldsymbol{r} \cdot \boldsymbol{n}}{2\pi r^2} \right) ds(\boldsymbol{\xi}) + \delta_{ij} c(\boldsymbol{\xi}_i) \\\
     G_{ij} &= \int_{\Gamma_j} \left( -\frac{1}{2\pi} \ln r \right) ds(\boldsymbol{\xi})
-\end{aligned} \qquad\text{(3.9)}$$
+\end{aligned} \qquad\text{(3.10)}$$
 
 $H_{ij}$ **の計算：**
 
 　まず、対角項 ($i = j$) について考える。このとき、前述の通り $\boldsymbol{r} \cdot \boldsymbol{n} = 0$ となるため、
 
-$$H_{ii} = c(\boldsymbol{\xi}_i) = \frac{1}{2} \qquad\text{(A39-1)}$$
+$$H_{ii} = c(\boldsymbol{\xi}_i) = \frac{1}{2} \qquad\text{(A310-1)}$$
 
 とできる。次に、非対角項 ($i \neq j$) について考える。このとき, $\boldsymbol{r}$ と $\boldsymbol{n}$ のなす角を $\theta$ とすると、以下のように変形できる。
 
@@ -392,7 +424,7 @@ $$\begin{aligned}
     H_{ij} &= -\frac{1}{2\pi} \int_{\Gamma_j} \frac{\cos \theta}{r} ds(\boldsymbol{\xi}) \\\
     &= -\frac{1}{2\pi} \int_{\alpha_1}^{\alpha_2} d\alpha \\\
     &= -\frac{1}{2\pi} (\alpha_2 - \alpha_1)
-\end{aligned} \qquad\text{(A39-2)}$$
+\end{aligned} \qquad\text{(A310-2)}$$
 
 すなわち、線分要素 $\Gamma_j$ の両端点 $\boldsymbol{\xi} _{j1}, \boldsymbol{\xi} _{j2}$ が観測点 $\boldsymbol{\xi} _i$ となす角度 $(\alpha_2 - \alpha_1)$ を用いて, $H _{ij}$ を表すことができる。
 
@@ -409,7 +441,7 @@ $$\begin{aligned}
     &= -\frac{1}{\pi} \int_{0}^{\frac{l_j}{2}} \ln s \ ds \\\
     &= -\frac{1}{\pi} \left[ s \ln s - s \right]_{0}^{\frac{l_j}{2}} \\\
     &= -\frac{l_j}{2\pi} \left( 1 - \ln\frac{l_j}{2} \right)
-\end{aligned} \qquad\text{(A39-3)}$$
+\end{aligned} \qquad\text{(A310-3)}$$
 
 　次に、非対角項 ($i \neq j$) について考える。観測点 $\boldsymbol{\xi}_i$ から線分 $\Gamma_j$ までの最短距離を $d$ とすると, $r = \sqrt{t^2 + d^2}$ となる。両端点における局所座標 $t$ の値をそれぞれ $t_1, t_2$ とすると、以下のように計算できる。
 
@@ -435,15 +467,15 @@ $$\begin{aligned}
     G_{ij} &= -\frac{1}{4\pi} [I]_{t_1}^{t_2} \\\
     &= -\frac{1}{2\pi} \left[  t \ln r - t + d\ \text{arctan} \frac{t}{d} \right]_{t_1}^{t_2} \\\
     &= \frac{1}{2\pi} \left( t_1 \ln r_1 - t_2 \ln r_2 + (t_2 - t_1) - d(\theta_2 - \theta_1) \right)
-\end{aligned} \qquad\text{(A39-4)}$$
+\end{aligned} \qquad\text{(A310-4)}$$
 
-#### A-Eq3.14
+#### A-Eq3.15
 
 　式 $(3.13)$ の積分を計算する。
 
 $$\boldsymbol{v}(\boldsymbol{x}) = \frac{1}{2\pi} \sum_{j=1}^{N} \left( q_j \int_{\Gamma_j} \frac{\boldsymbol{r}}{r^2} ds(\boldsymbol{\xi}) - \phi_j \int_{\Gamma_j} \frac{1}{r^2} \left( \boldsymbol{n} - \frac{2 (\boldsymbol{r} \cdot \boldsymbol{n})}{r^2} \boldsymbol{r} \right) ds(\boldsymbol{\xi}) \right) \qquad\text{(3.13)}$$
 
-　この計算のため、[A-Eq2.6](#a-eq26)と同様に、相対ベクトル $\boldsymbol{r}$ を分解し、局所座標系 $s$ を導入する。以降、積分変数を $ds(\boldsymbol{\xi}) = ds$ とし、線分の始点を $s = s_1$、終点を $s = s_2$ と表す。
+　この計算のため、[A-Eq3.7](#a-eq37)と同様に、相対ベクトル $\boldsymbol{r}$ を分解し、局所座標系 $s$ を導入する。以降、積分変数を $ds(\boldsymbol{\xi}) = ds$ とし、線分の始点を $s = s_1$、終点を $s = s_2$ と表す。
 
 (1) $\int_{\Gamma_j} \frac{\boldsymbol{r}}{r^2} ds(\boldsymbol{\xi})$ の計算：
 
@@ -485,11 +517,11 @@ $$\rho \left( \frac{\partial \boldsymbol{v}}{\partial t} + (\boldsymbol{v} \cdot
 
 $$\frac{\partial \rho}{\partial t} + \nabla \cdot (\rho \boldsymbol{v}) = 0 \qquad\text{(A11-2)}$$
 
-　非圧縮性を仮定すると, $\rho = \text{const.}$ となるため、式 $(A11-2)$ は以下のように簡略化される。
+　非圧縮性を仮定すると, $\rho = \text{const.}$ となるため、式 $\text{(A11-2)}$ は以下のように簡略化される。
 
 $$\nabla \cdot \boldsymbol{v} = 0 \qquad\text{(A11-3)}$$
 
-　さらに、非回転性 ($\nabla \times \boldsymbol{v} = 0$) を仮定すると、式 $(A11-1)$ は式 $(A11-4)$ のように簡略化される。この時点で、粘性項 $\mu \nabla^2 \boldsymbol{v}$ はゼロになり、粘性の影響は無視される。
+　さらに、非回転性 ($\nabla \times \boldsymbol{v} = 0$) を仮定すると、式 $\text{(A11-1)}$ は式 $\text{(A11-4)}$ のように簡略化される。この時点で、粘性項 $\mu \nabla^2 \boldsymbol{v}$ はゼロになり、粘性の影響は無視される。
 
 $$\begin{aligned}
     \text{LHS} &= \rho \left( \frac{\partial \boldsymbol{v}}{\partial t} + (\boldsymbol{v} \cdot \nabla) \boldsymbol{v} \right) \\\
@@ -506,6 +538,6 @@ $$\therefore \quad \rho \left( \frac{\partial \boldsymbol{v}}{\partial t} + \nab
 >
 > 本シミュレーションは、迷路を解くような（終点領域が存在する場合に、そこへ向かう流れが発生する）流れを計算することを目的としている。この場合、壁面で滑りなしの境界条件を課す必要はなく、ポテンシャル流れの仮定が妥当と考えた。
 
-　さらに、流れの定常性 ($\frac{\partial \boldsymbol{v}}{\partial t} = 0$) と外力の不存在 ($\boldsymbol{f} = 0$) を仮定すると、式 $(A11-4)$ は以下のように簡略化される（ベルヌーイの定理の微分形）。
+　さらに、流れの定常性 ($\frac{\partial \boldsymbol{v}}{\partial t} = 0$) と外力の不存在 ($\boldsymbol{f} = 0$) を仮定すると、式 $\text{(A11-4)}$ は以下のように簡略化される（ベルヌーイの定理の微分形）。
 
 $$\frac{\rho}{2} \nabla |\boldsymbol{v}|^2 = -\nabla p \qquad\text{(A11-5)}$$
