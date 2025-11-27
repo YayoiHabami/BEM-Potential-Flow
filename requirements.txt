@@ -1,0 +1,6 @@
+# for tensor/matrix operations
+numpy
+# for plotting
+matplotlib
+# for checking memory usage
+psutil

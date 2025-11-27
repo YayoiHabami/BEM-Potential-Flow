@@ -20,8 +20,14 @@ from typing import Optional, Final
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.path import Path  # ポリゴン内外判定用
+import psutil  # 利用可能なメモリ量の取得用
 
 _INV_2PI: Final[float] = 1.0 / (2.0 * np.pi)
+
+def _measure_available_memory() -> int:
+    """利用可能なメモリ量をバイト単位で取得する"""
+    mem = psutil.virtual_memory()
+    return mem.available
 
 def _normalize_angles(angles: np.ndarray) -> np.ndarray:
     """角度を -π〜π の範囲に正規化する (ベクトル化版)
@@ -474,6 +480,7 @@ class BEMPotentialFlow:
     2. 1で作成したオブジェクトを使用し、本クラスを初期化
     3. 内部点のポテンシャル計算: calculate_potentialまたはcalculate_potential_meshを呼び出す.
        内部点の速度ベクトル計算: calculate_velocityまたはcalculate_velocity_meshを呼び出す.
+    4. setupメソッドを呼び出すことで、境界条件を変更して再計算が可能. 3に戻る.
     """
 
     def __init__(self, bcs: BoundaryConditions):
@@ -599,6 +606,39 @@ class BEMPotentialFlow:
 
         self._is_solved = True
 
+    def _calculate_chunk_count(self, num_points: int,
+                               max_ratio: float = 1/16) -> int:
+        """利用可能なメモリ量に基づいてチャンク数を計算する
+
+        Parameters
+        ----------
+        num_points : int
+            計算に使用する内部点の数 M
+            (`_calculate_potential`, `_calculate_velocity`の引数)
+        max_ratio : float
+            利用可能なメモリ量に対する最大使用率
+
+        Returns
+        -------
+        chunk_count : int
+            使用可能なメモリ量から計算された、分割するべきチャンク数
+
+        Notes
+        -----
+        - `_calculate_potential`, `_calculate_velocity`の内部では、
+          境界セグメント数をNとすると、MxNx2のテンソルを作成する. この
+          テンソルのメモリ使用量が、最大メモリ使用量*max_ratioを超えないように
+          分割するべき数を計算する. 例えば M=500,000、N=750の場合、テンソルの
+          占有するメモリ量は500,000*750*2*8 bytes = 6GBとなる. max_ratio=1/8
+          かつ利用可能なメモリ量が8GBの場合、6分割するものとする.
+        """
+        # 使用されるメモリ量を計算
+        used_memory = num_points * self.bcs.total_count() * 2 * 8  # bytes
+
+        # チャンク数を計算 (切り上げ)
+        max_memory = _measure_available_memory() * max_ratio
+        return max(1, int(np.ceil(used_memory / max_memory)))
+
     def _calculate_potential(self, points: np.ndarray) -> np.ndarray:
         """
         複数の内部点におけるポテンシャル値 φ(x, y) を計算する
@@ -632,6 +672,7 @@ class BEMPotentialFlow:
         # 端点へのベクトルr1,r2を計算: (M, N, 2)
         r1s = p1s - ps
         r2s = p2s - ps
+        del p1s, p2s, ps
         # 極端に境界に近い点は後でnanにする
         sq_tol = (1e-3)**2  # 1単位を1mmとして1μmの距離
         sq_r1s = np.sum(r1s**2, axis=2)  # |r1|^2 (M, N)
@@ -651,6 +692,7 @@ class BEMPotentialFlow:
         theta1s = np.arctan2(r1s[:, :, 1], r1s[:, :, 0])
         theta2s = np.arctan2(r2s[:, :, 1], r2s[:, :, 0])
         angle_diffs = _normalize_angles(theta2s - theta1s)
+        del r1s, r2s, theta1s, theta2s
 
         # 境界値 q, φ を取得: (1, N)
         qs = self.q_boundary[np.newaxis, :]
@@ -660,6 +702,7 @@ class BEMPotentialFlow:
         with np.errstate(divide='ignore', invalid='ignore'):
             phi_spec = - qs * (s2s/2 * np.log(sq_r2s) - s1s/2 * np.log(sq_r1s) - (s2s - s1s)) \
                      + (phis - qs * ds) * angle_diffs
+            del sq_r1s, sq_r2s, s1s, s2s, ds, angle_diffs
         phi = _INV_2PI * np.sum(phi_spec, axis=1)  # (M,)
 
         # 極端に境界に近い点はnanにする
@@ -718,21 +761,36 @@ class BEMPotentialFlow:
         points = np.column_stack((xx.ravel(), yy.ravel()))  # (M, 2)
 
         # 内外判定マスクを作成
-        inside_mask = self.bcs.contains_points(points)  # (M,)
-        if not np.any(inside_mask):
+        is_inside = self.bcs.contains_points(points)  # (M,)
+        if not np.any(is_inside):
             # 全点が外部の場合、全てnanを返す
             return np.full(xx.shape, np.nan)
 
-        # 内部点のみ抽出して計算
-        internal_points = points[inside_mask]  # (K, 2)
-        potentials_internal = self._calculate_potential(internal_points)  # (K,)
+        # Unable to allocate memoryを避けるためのチャンク数を計算
+        chunk_count = self._calculate_chunk_count(np.sum(is_inside))
+        chunk_size = int(np.ceil(np.sum(is_inside) / chunk_count))
+
+        # ポテンシャル計算
+        pot_flat = np.full(points.shape[0], np.nan)  # (M,)
+
+        # チャンクごとに内部点のポテンシャル値を計算
+        inside_mask = np.where(is_inside)[0]
+        for i in range(chunk_count):
+            print(f"\r{'#'*(2*(i+1))}{' '*(2*(chunk_count-i-1))} | {i+1}/{chunk_count}",
+                  end='', flush=True)
+
+            # インデックス範囲を計算
+            start_idx = i * chunk_size
+            end_idx = min((i + 1) * chunk_size, len(inside_mask))
+
+            # チャンクに対応するインデックスを取得
+            chunk_mask = inside_mask[start_idx:end_idx]
+            if len(chunk_mask) > 0:
+                pot_flat[chunk_mask] = self._calculate_potential(points[chunk_mask])
+        print("\r", end='', flush=True)
 
         # 結果を元の格子形状に戻す
-        potentials = np.full(points.shape[0], np.nan)  # (M,)
-        potentials[inside_mask] = potentials_internal
-        phi_mesh = potentials.reshape(xx.shape)  # (grid_y, grid_x)
-
-        return phi_mesh
+        return pot_flat.reshape(xx.shape)  # (grid_y, grid_x)
 
     def _calculate_velocity(self, points: np.ndarray) -> np.ndarray:
         """
@@ -767,6 +825,7 @@ class BEMPotentialFlow:
         # 端点へのベクトルr1,r2を計算: (M, N, 2)
         r1s = p1s - ps
         r2s = p2s - ps
+        del ps
         # 極端に境界に近い点は後でnanにする
         sq_tol = (1e-3)**2  # 1単位を1mmとして1μmの距離
         sq_r1s = np.sum(r1s**2, axis=2)  # |r1|^2 (M, N)
@@ -777,15 +836,17 @@ class BEMPotentialFlow:
         ts = self.bcs.tangents()[np.newaxis, :, :]
         ns = self.bcs.normals()[np.newaxis, :, :]
 
-        # 内積r・t, r・nを計算: (M, N)
-        s1s = np.sum(r1s * ts, axis=2)
-        s2s = np.sum(r2s * ts, axis=2)
-        ds = np.sum(r1s * ns, axis=2)
-
         # ∠(p2s-point-p1s) を計算: (M, N)
         theta1s = np.arctan2(r1s[:, :, 1], r1s[:, :, 0])
         theta2s = np.arctan2(r2s[:, :, 1], r2s[:, :, 0])
         angle_diffs = _normalize_angles(theta2s - theta1s)
+        del theta1s, theta2s
+
+        # 内積r・t, r・nを計算: (M, N)
+        s1s = np.sum(r1s * ts, axis=2)
+        s2s = np.sum(r2s * ts, axis=2)
+        ds = np.sum(r1s * ns, axis=2)
+        del r1s, r2s
 
         # 境界値 q, φ を取得: (1, N)
         qs = self.q_boundary[np.newaxis, :]
@@ -868,8 +929,6 @@ class BEMPotentialFlow:
         u_grid = np.zeros_like(xx)
         v_grid = np.zeros_like(yy)
 
-        rows, cols = xx.shape
-
         # グリット状の点を (N, 2) 配列に変換
         points = np.column_stack((xx.ravel(), yy.ravel()))
 
@@ -880,16 +939,35 @@ class BEMPotentialFlow:
             # 全て外部点の場合はnanを返す
             return np.full(xx.shape, np.nan), np.full(yy.shape, np.nan)
 
+        # Unable to allocate memoryを避けるためのチャンク数を計算
+        chunk_count = self._calculate_chunk_count(np.sum(is_inside))
+        chunk_size = int(np.ceil(np.sum(is_inside) / chunk_count))
+
         # 速度計算
         u_flat = np.full(points.shape[0], np.nan)
         v_flat = np.full(points.shape[0], np.nan)
-        velocities = self._calculate_velocity(points[is_inside])
-        u_flat[is_inside] = velocities[:, 0]
-        v_flat[is_inside] = velocities[:, 1]
+
+        # チャンクごとに内部点の速度を計算
+        inside_mask = np.where(is_inside)[0]
+        for i in range(chunk_count):
+            print(f"\r{'#'*(2*(i+1))}{' '*(2*(chunk_count-i-1))} | {i+1}/{chunk_count}",
+                  end='', flush=True)
+
+            # インデックス範囲を計算
+            start_idx = i * chunk_size
+            end_idx = min((i + 1) * chunk_size, len(inside_mask))
+
+            # チャンクに対応するインデックスを取得
+            chunk_mask = inside_mask[start_idx:end_idx]
+            if len(chunk_mask) > 0:
+                velocities = self._calculate_velocity(points[chunk_mask])
+                u_flat[chunk_mask] = velocities[:, 0]
+                v_flat[chunk_mask] = velocities[:, 1]
+        print("\r", end='', flush=True)
 
         # 元のグリッド形状に戻す
-        u_grid = u_flat.reshape((rows, cols))
-        v_grid = v_flat.reshape((rows, cols))
+        u_grid = u_flat.reshape(xx.shape)
+        v_grid = v_flat.reshape(xx.shape)
         return u_grid, v_grid
 
 
@@ -1092,6 +1170,8 @@ def _get_boundary_conditions(outer_vertices: _VERTICES,
             raise ValueError(f"Error in inner polygon with vertices {hole_verts}") from e
     return bcs
 
+_example_choices: list[int] = []
+_example_choices.append(1)
 def _boundary_example_1():
     """コの字型パイプの境界条件例"""
     # 形状定義（矩形水槽の中に障害物があるような単純な形状、あるいはパイプ）
@@ -1119,6 +1199,7 @@ def _boundary_example_1():
     ]
     return BoundaryConditions(np.array(vertices), bc_list, max_length=0.1)
 
+_example_choices.append(2)
 def _boundary_example_2():
     """複雑な形状の境界条件例"""
     # 外部形状定義
@@ -1137,6 +1218,7 @@ def _boundary_example_2():
         max_length=0.1
     )
 
+_example_choices.append(3)
 def _boundary_example_3():
     """内部に境界をもつ形状の境界条件例"""
     # 外部形状定義
@@ -1162,16 +1244,75 @@ def _boundary_example_3():
         max_length=0.1
     )
 
+_example_choices.append(4)
+def _boundary_example_4():
+    """迷路(1)"""
+    # "##"が壁、"  "が流路; "in"が流入、"out"が流出
+    #
+    #   ############
+    #   ##        out
+    #   ##  ##  ####
+    #   ######    ##
+    #   in        ##
+    #   ############
+    vertices : _VERTICES = [
+        (0, 4), (0, 2), (1, 2), (1, 3), (2, 3), (2, 1),
+        (0, 1), (0, 0), (4, 0), (4, 2), (3, 2), (3, 3), (4, 3), (4, 4)
+    ]
+    return _get_boundary_conditions(
+        vertices,
+        io_values = {
+            ((0, 1), (0, 0)):  0.0,
+            ((4, 3), (4, 4)): 10.0
+        },
+        max_length=0.1
+    )
+
+_example_choices.append(5)
+def _boundary_example_5():
+    """迷路(2; 内部境界あり)"""
+    # "##"が壁、"  "が流路; "in"が流入、"out"が流出
+    #
+    #   ####################
+    #   ##      ##        out
+    #   ##  ########  ######
+    #   ##  ##            ##
+    #   ##  ##  ########  ##
+    #   ##      ##        ##
+    #   in  ##  ##  ##  ####
+    #   ##  ##      ##    ##
+    #   ####################
+    vertices : _VERTICES = [
+        (0, 7), (0, 2), (0, 1), (0, 0),
+        (1, 0), (1, 2), (2, 2), (2, 0), (5, 0), (5, 2), (6, 2), (6, 0), (8, 0),
+        (8, 1), (7, 1), (7, 2), (8, 2), (8, 5), (6, 5), (6, 6), (8, 6), (8, 7),
+        (4, 7), (4, 6), (5, 6), (5, 5), (2, 5), (2, 3), (1, 3), (1, 6), (3, 6), (3, 7)
+    ]
+    inner_vertices: list[_VERTICES] = [
+        [(3, 1), (3, 4), (7, 4), (7, 3), (4, 3), (4, 1)]
+    ]
+    return _get_boundary_conditions(
+        vertices,
+        inner_vertices=inner_vertices,
+        io_values={
+        ((0, 2), (0, 1)): 0.0,
+        ((8, 6), (8, 7)): 10.0
+        },
+        max_length=0.1
+    )
+
 def _parse_args():
     """コマンドライン引数を解析する. 計算を行う必要がない場合にはquit()"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ex", type=int, choices=[1, 2, 3],
+    parser.add_argument("--ex", type=int, choices=_example_choices,
                         default=1,
                         help="境界条件の例番号")
     parser.add_argument("--pot", action="store_true",
                         help="ポテンシャル場を表示")
     parser.add_argument("--vel", action="store_true",
                         help="速度場を表示")
+    parser.add_argument("--grid", type=int, default=400,
+                        help="各軸方向のグリッド数 (デフォルト: 400); 2D格子点数は grid^2")
     args = parser.parse_args()
     if not args.pot and not args.vel:
         print("Warning: At least one of --pot or --vel must be specified.")
@@ -1184,14 +1325,8 @@ def main():
 
     print("Setting up boundary conditions and solving BEM...")
     start_time = perf_counter()
-    if args.ex == 1:
-        bcs = _boundary_example_1()
-    elif args.ex == 2:
-        bcs = _boundary_example_2()
-    elif args.ex == 3:
-        bcs = _boundary_example_3()
-    else:
-        raise ValueError("Invalid example number.")
+    # args.exを信頼して対応する境界条件関数を呼び出す
+    bcs : BoundaryConditions = globals()[f"_boundary_example_{args.ex}"]()
     print(f"  -> Boundary conditions set up. ({perf_counter() - start_time:.2f} sec)")
 
     # 1. 境界積分方程式を解く
@@ -1201,10 +1336,9 @@ def main():
     print(f"  -> BEM solved. ({perf_counter() - start_time:.2f} sec)")
 
     # 2.1 グリッド作成
-    n_grids = 400
     min_x, max_x, min_y, max_y = bcs.aabb()
-    x_range = np.linspace(min_x - 0.5, max_x + 0.5, n_grids)
-    y_range = np.linspace(min_y - 0.5, max_y + 0.5, n_grids)
+    x_range = np.linspace(min_x - 0.5, max_x + 0.5, args.grid)
+    y_range = np.linspace(min_y - 0.5, max_y + 0.5, args.grid)
     xx, yy = np.meshgrid(x_range, y_range)
     total_points = xx.size
 
@@ -1235,7 +1369,7 @@ def main():
 
     # 3. 結果のプロット
     print("Plotting results...")
-    skip = max(1, n_grids // 50)  # 最大50x50のベクトル表示
+    skip = max(1, args.grid // 50)  # 最大50x50のベクトル表示
     _plot_result(xx, yy, np.vstack([bcs.vertices, bcs.vertices[0]]),
                  pp = pp, uu_vv=uu_vv, skip=skip, inner_polys=inner_polys)
 

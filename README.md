@@ -6,6 +6,10 @@
 
 本シミュレーションでは、迷路のような複雑な領域において、入り口から出口へ至る流れ場を計算することを目的としています。非圧縮・非回転・非粘性かつ定常な流れを仮定し、支配方程式であるラプラス方程式を境界積分方程式に変換して数値的に解析します。
 
+<img src="img/maze_potential_and_flow.svg" alt="Potential Flow in a Maze-like Domain (a) Potential Field (b) Velocity Field" width="650"/>
+
+**図**: 迷路状領域におけるポテンシャル流れの例
+
 BEMは、境界領域の解析のみを離散化するため、メッシュ生成が容易で計算コストを抑えられるという利点があります。本プログラムでは、以下の手順で解析を行います。
 
 1. **形状定義**: 解析領域の境界（壁、入口、出口）を線分要素で定義
@@ -25,7 +29,7 @@ BEMは、境界領域の解析のみを離散化するため、メッシュ生�
 本プログラムはPython3で実装されています。実行には以下のライブラリが必要です。
 
 ```bash
-pip install numpy matplotlib
+pip install numpy matplotlib psutil
 ```
 
 ### 2. シミュレーションの実行
