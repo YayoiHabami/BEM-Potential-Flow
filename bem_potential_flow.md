@@ -1,6 +1,8 @@
 # ポテンシャル流れ
 
 > WARN: GitHubのMarkdownレンダラーでは数式が正しく表示されない場合があります。特に太字 (`\bm`や`\boldsymbol`) が太字として表示されないことがあります。 数式を正しく表示するには、VSCodeのMarkdownプレビューなどを利用してください。
+>
+> 同様の内容を[Qiita記事](https://qiita.com/Yayoi-Habami/items/cccf3bce70fbc33f0919)にも掲載しています。数式の表示が正しくない場合は、そちらもご参照ください。
 
 ## 目次
 
@@ -20,6 +22,8 @@
 - [参考文献](#参考文献)
 - [Appendix](#appendix)
   - [A. 計算](#a-計算)
+    - [A-Eq3.1](#a-eq31)
+    - [A-Eq3.5](#a-eq35)
     - [A-Eq3.7](#a-eq37)
     - [A-Eq3.10](#a-eq310)
     - [A-Eq3.15](#a-eq315)
@@ -32,7 +36,7 @@
 
 　本シミュレーションの目的は、障害物が存在する複雑な環境において、始点から終点へ至る流れ場を計算することである。具体的には、迷路のような環境における入口から出口への流れを、[ポテンシャル流れ](#12-ポテンシャル流れとは)と[境界要素法（BEM: Boundary Element Method）](#13-bemとは)を用いて解析する。
 
-　解析は以下の手順で行う。
+　解析は以下の4つの手順で行う。
 
 1. **形状定義**：解析領域の境界（壁、入口、出口）を閉曲線として定義し、線分要素に分割する。
 2. **境界条件の設定**：入口と出口にはポテンシャル値を与え、壁面には法線流速ゼロ（壁を突き抜けない）という条件を設定する。
@@ -77,31 +81,31 @@ $$\boldsymbol{v} = \nabla \phi \qquad\text{(1.1)}$$
 1. **計算コストの削減**：解析対象の次元を1つ減らすことができる。例えば、2次元領域の解析では境界が1次元となるため、計算コストが大幅に削減される。
 2. **無限領域への適用**：領域が無限に広がる問題であっても、境界上の情報のみを扱うため、容易に解析できる。これは、無限遠まで広がる流れ場の解析に特に適している。
 
-　一方、BEMには欠点もある。離散化によって得られる連立方程式の係数行列が密行列かつ非対称となるため、要素数が増加すると計算コストが急激に増大する。この問題は、高速多重極法（FMM: Fast Multipole Method）などの手法を組み合わせることである程度緩和できる。
+　一方、BEMには欠点もある。離散化によって得られる連立方程式の係数行列が密行列かつ非対称となるため、要素数が増加すると計算コストが急激に増大する。この問題は、高速多重極法（FMM: Fast Multipole Method）などの手法を組み合わせることである程度緩和できる。現時点では、本プログラムは要素数が比較的少ない2次元解析に限定しているため、密行列を直接扱う形で実装している。
 
 ## 2. 境界積分方程式の定式化
 
 ### 2.1 支配方程式
 
-　前節で述べたBEMを用いて、領域内部の任意の点における速度ベクトルを計算する方法について説明する。まず、ポテンシャル流れの支配方程式を確認する。
+　本章では、前節で述べたBEMを用いて、領域内部の任意の点における速度ベクトルを計算する方法について説明する。まず、ポテンシャル流れの支配方程式を確認する。
 
-　点 $\boldsymbol{x}$ における速度ベクトル $\boldsymbol{v} = (u, v)$ は、流れの非回転性により、式 $(1.1)$ を満たすスカラー関数 $\phi(\boldsymbol{x})$（速度ポテンシャル）を用いて表される。さらに、非圧縮性の条件 $\nabla \cdot \boldsymbol{v} = 0$ より, $\phi$ はラプラス方程式
+　[節1.2](#12-ポテンシャル流れとは)で述べたように、ポテンシャル流れでは、点 $\boldsymbol{x}$ における速度ベクトル $\boldsymbol{v} = (u, v)$ が、スカラー関数である速度ポテンシャル $\phi(\boldsymbol{x})$ を用いて式 $(1.1)$ のように表される。さらに、非圧縮性の条件 $\nabla \cdot \boldsymbol{v} = 0$ を適用すると、速度ポテンシャル $\phi$ は以下のラプラス方程式を満たす。
 
 $$\nabla^2 \phi = \frac{\partial^2 \phi}{\partial x^2} + \frac{\partial^2 \phi}{\partial y^2} = 0 \qquad\text{(2.1)}$$
 
-を満たす。したがって、ポテンシャル流れの解析は、与えられた領域内でラプラス方程式 $(2.1)$ と境界条件を満たす速度ポテンシャル $\phi$ を求める問題に帰着される。
+　したがって、ポテンシャル流れの解析は、**与えられた領域内でラプラス方程式 $(2.1)$ と境界条件を満たす速度ポテンシャル $\phi$ を求める問題**に帰着される。
 
 ### 2.2 境界条件の設定
 
-　閉曲線境界 $\Gamma$ 上での条件を設定する。閉曲線によって区切られた、流体が存在する側を内部、その補集合を外部として、境界上の外向き法線ベクトルを $\boldsymbol{n}$ とする。境界の一部を**開口部**とし、そこでは流体の出入りがあるものとする。その他の部分は**壁面**であり、流体は壁を貫通しない。
+　次に、閉曲線境界 $\Gamma$ 上での条件を設定する。閉曲線によって区切られた、流体が存在する側を内部、その補集合を外部として、境界上の外向き法線ベクトルを $\boldsymbol{n}$ とする。このように定義した境界を、流体の出入りのある**開口部**と、流体が壁を貫通しない**壁面**に分類する。
 
 **開口部**：流体の出入りがある辺では、法線方向の速度成分を既知とする。図 2.1 (a), (b) に示すように、流体領域へと流入する部分では $V_{\text{in/out}} < 0$、流体領域から流出する部分では $V_{\text{in/out}} > 0$ となる。すなわち、
 
 $$\frac{\partial \phi}{\partial n} = \boldsymbol{v} \cdot \boldsymbol{n} = V_{\text{in/out}} \qquad\text{(2.2)}$$
 
-ここで, $V_{\text{in/out}}$ は既知の値である（流入なら負、流出なら正など、法線の向きの定義に依存する）。
+ここで, $V_{\text{in/out}}$ は既知の値であり、法線の向きの定義に依存して流入なら負、流出なら正となる。
 
-**壁面**：壁面では流体が壁を突き抜けないため、法線方向の速度成分はゼロである (式 $(2.3)$)。このとき、図 2.1 (c) に示すように、流れは壁を「滑る」形となる。[節1.2](#12-ポテンシャル流れとは)で述べたように、ポテンシャル流れでは粘性の影響が無視されるため、壁面での滑りなし条件（壁面において速度ベクトルがゼロとなる条件）は課されない。
+**壁面**：壁面では流体が壁を突き抜けないため、法線方向の速度成分はゼロである (式 $(2.3)$ )。このとき、図 2.1 (c) に示すように、流れは壁を「滑る」形となる。[節1.2](#12-ポテンシャル流れとは)で述べたように、ポテンシャル流れでは粘性の影響が無視されるため、壁面での滑りなし条件（壁面において速度ベクトルがゼロとなる条件）は課されない。
 
 $$\frac{\partial \phi}{\partial n} = \boldsymbol{v} \cdot \boldsymbol{n} = 0 \qquad\text{(2.3)}$$
 
@@ -109,19 +113,17 @@ $$\frac{\partial \phi}{\partial n} = \boldsymbol{v} \cdot \boldsymbol{n} = 0 \qq
 
 **図 2.1** : 点 $\boldsymbol{\xi}$ における境界条件と流れのイメージ
 
-　また、流体では連続の式（質量保存則）により、閉じた領域への総流入量と総流出量は一致しなければならない。ポテンシャル流れでは流体は非圧縮であるため、全境界での流入体積流量と流出体積流量の和はゼロとなる。すなわち、
+　また、流体では連続の式（質量保存則）により、閉じた領域への総流入量と総流出量は一致しなければならない。ポテンシャル流れでは流体は非圧縮であるため、全境界での流入体積流量と流出体積流量の和はゼロとなる (式 $(2.4)$ )。
 
 $$\int_{\Gamma} \frac{\partial \phi}{\partial n} ds = 0 \qquad\text{(2.4)}$$
 
-が成り立つ。
-
-　**内部境界** $\Gamma_{\text{inner}}$ を設ける場合、その法線ベクトルはその境界が囲う領域の内側を向くように定義する。このとき、流体領域は外部境界 $\Gamma_{\text{outer}}$ に内包され、内部境界の外側に位置する領域となる。内部境界が定義されている場合、境界要素 $\Gamma_i$ は外部境界と内部境界のどちらかに属するものとする。
+　**内部境界** $\Gamma_{\text{inner}}$ を設ける場合、その法線ベクトルはその境界が囲う領域の内側を向くように定義する。このとき、流体領域は外部境界 $\Gamma_{\text{outer}}$ に内包され、内部境界の外側に位置する領域となる。内部境界が定義されている場合、境界要素 $\Gamma_i$ の集合は、外部境界と内部境界の和集合として表される。
 
 <img src="img/inner_outer_normals.svg" alt="Normal Vectors on Inner and Outer Boundaries" width="400"/>
 
 **図 2.2** : 内部境界と外部境界における法線ベクトルの向き
 
-> **注**：本プログラムでは、開口部では速度ポテンシャル $\phi$ の値を指定し（ディリクレ条件）、壁面では法線速度成分 $\partial \phi / \partial n$ を指定する（ノイマン条件）形で境界条件を設定する。開口部において既知である $V_{\text{in/out}}$ は、指定されたポテンシャル値から計算されるため、プログラム上では明示的に示さない。
+> **注**：本プログラムでは、開口部では速度ポテンシャル $\phi$ の値を指定し（ディリクレ条件）、壁面では法線速度成分 $\partial \phi / \partial n$ を指定する（ノイマン条件）形で境界条件を設定する。開口部における $V_{\text{in/out}}$ は、指定されたポテンシャル値から計算されるため、プログラム上では明示的に指定する必要はない。
 >
 > 例えば $(0, 0)-(1, 0)-(1, 1)-(0, 1)$ の四角形領域において、左辺を入口、右辺を出口、上辺と下辺を壁面とする場合、境界条件は以下のように設定される。ポテンシャルの値 $\phi$ は任意の値を設定可能であるが、一般には入口を $0$, 出口を正の値に設定することが多い。
 > - 入口（左辺）: $\phi = 0$ （ディリクレ条件）
@@ -132,7 +134,7 @@ $$\int_{\Gamma} \frac{\partial \phi}{\partial n} ds = 0 \qquad\text{(2.4)}$$
 
 ### 2.3 境界積分方程式による解析
 
-　任意形状の境界を持つ問題において、ラプラス方程式の解を内部点 $\boldsymbol{x}$ で求めるため、グリーンの第2恒等式を利用する（参考文献[1]ではGreen-Gaussの定理から導出）。観測点を $\boldsymbol{x}$、境界上の積分点を $\boldsymbol{\xi}$ とし、相対位置ベクトルを $\boldsymbol{r} = \boldsymbol{\xi} - \boldsymbol{x}$、その大きさを $r = \|\boldsymbol{r}\|$ と表す。2次元ラプラス方程式の基本解（点源によるポテンシャル）は次式で与えられる。
+　任意形状の境界を持つ問題において、ラプラス方程式の解を求めるため、**グリーンの第2恒等式**を利用する（参考文献[1]ではGreen-Gaussの定理から導出）。観測点を $\boldsymbol{x}$、境界上の積分点を $\boldsymbol{\xi}$ とし、相対位置ベクトルを $\boldsymbol{r} = \boldsymbol{\xi} - \boldsymbol{x}$、その大きさを $r = \|\boldsymbol{r}\|$ と表す。このとき、2次元ラプラス方程式の基本解（点源によるポテンシャル）は次式で与えられる。
 
 $$G(\boldsymbol{x}, \boldsymbol{\xi}) = -\frac{1}{2\pi} \ln r \qquad\text{(2.5)}$$
 
@@ -140,7 +142,7 @@ $$G(\boldsymbol{x}, \boldsymbol{\xi}) = -\frac{1}{2\pi} \ln r \qquad\text{(2.5)}
 
 $$c(\boldsymbol{x}) \phi(\boldsymbol{x}) = \oint_{\Gamma} \left(G(\boldsymbol{x}, \boldsymbol{\xi}) \frac{\partial \phi(\boldsymbol{\xi})}{\partial n} - \phi(\boldsymbol{\xi}) \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n} \right) ds(\boldsymbol{\xi}) \qquad\text{(2.6)}$$
 
-ここで, $\phi(\boldsymbol{\xi})$ は境界上の点 $\boldsymbol{\xi}$ における速度ポテンシャル, $\frac{\partial \phi(\boldsymbol{\xi})}{\partial n}$ はその法線方向微分（すなわち法線方向流速）である。また, $c(\boldsymbol{x})$ は観測点 $\boldsymbol{x}$ の位置に依存する幾何学的係数であり、式 $(2.7)$ のように定義される<sup>[1, Eq. (29)]</sup>。本シミュレーションでは、境界を線分要素で近似しているため, $\boldsymbol{x} \in \Gamma$ の場合は $c(\boldsymbol{x}) = 1/2$ とする。
+ここで, $\phi(\boldsymbol{\xi})$ は境界上の点 $\boldsymbol{\xi}$ における速度ポテンシャル, $\frac{\partial \phi(\boldsymbol{\xi})}{\partial n}$ はその法線方向微分（すなわち法線方向流速）である。また, $c(\boldsymbol{x})$ は観測点 $\boldsymbol{x}$ の位置に依存する幾何学的係数であり、式 $(2.7)$ のように定義される<sup>[1, Eq. (29)]</sup>。
 
 $$c(\boldsymbol{x}) = \begin{cases}
     1 & (\boldsymbol{x} \text{ が領域内部にある場合}) \\\
@@ -149,11 +151,20 @@ $$c(\boldsymbol{x}) = \begin{cases}
     0 & (\boldsymbol{x} \text{ が領域外にある場合})
 \end{cases} \qquad\text{(2.7)}$$
 
-　境界条件から, $\frac{\partial \phi(\boldsymbol{\xi})}{\partial n}$ は開口部では既知の値 $V_{\text{in/out}}(\boldsymbol{\xi})$、壁面ではゼロである。一方, $\phi(\boldsymbol{\xi})$ は未知量である。したがって、式 $(2.7)$ は境界上の未知量 $\phi(\boldsymbol{\xi})$ に関する積分方程式となる。この積分方程式を離散化して連立方程式を解くことで、境界上の全ての点における速度ポテンシャル $\phi(\boldsymbol{\xi})$ を求めることができる。
+　本シミュレーションでは、境界を線分要素で近似しているため, $\boldsymbol{x} \in \Gamma$ の場合は $c(\boldsymbol{x}) = 1/2$ とする。
+
+**境界条件との関係**
+
+　式 $(2.6)$ の右辺には、境界上の2つの量が現れる。
+
+- $\boldsymbol{q}(\boldsymbol{\xi}) = \frac{\partial \phi(\boldsymbol{\xi})}{\partial n}$：ノイマン条件が指定された場合は既知、それ以外では未知量
+- $\phi(\boldsymbol{\xi})$：ディリクレ条件が指定された場合は既知、それ以外では未知量
+
+　したがって、式 $(2.6)$ は境界上の未知量 $\boldsymbol{q}(\boldsymbol{\xi}), \phi(\boldsymbol{\xi})$ に関する**積分方程式**となる。この積分方程式を離散化して連立方程式として解くことで、境界上の全ての点における $\boldsymbol{q}(\boldsymbol{\xi}), \phi(\boldsymbol{\xi})$ を求めることができる。
 
 **内部点での速度ベクトルの計算**
 
-　境界上の $\phi$ と $\frac{\partial \phi}{\partial n}$ が求まれば、内部点 $\boldsymbol{x}$ における速度ベクトル $\boldsymbol{v}(\boldsymbol{x}) = \nabla \phi(\boldsymbol{x})$ を計算できる。内部点 $\boldsymbol{x}$ では $c(\boldsymbol{x}) = 1$ であるから、式 $(2.7)$ の両辺を $\boldsymbol{x}$ で微分すると、
+　境界上の $\phi$ と $\frac{\partial \phi}{\partial n}$ が求まれば、内部点 $\boldsymbol{x}$ における速度ベクトル $\boldsymbol{v}(\boldsymbol{x}) = \nabla \phi(\boldsymbol{x})$ を計算できる。内部点 $\boldsymbol{x}$ では $c(\boldsymbol{x}) = 1$ であるから、式 $(2.7)$ の両辺を $\boldsymbol{x}$ で微分すると、以下の式 $(2.8)$ が得られる。ここで、最後の式は境界を $N$ 個の要素 $\Gamma_j$ に分割した場合の離散化表現である。
 
 $$\begin{aligned}
     \boldsymbol{v}(\boldsymbol{x}) &= \nabla_{\boldsymbol{x}} \phi(\boldsymbol{x}) \\\
@@ -161,9 +172,16 @@ $$\begin{aligned}
     &= \sum_{j=1}^{N} \int_{\Gamma_j} \left( \nabla_{\boldsymbol{x}} G(\boldsymbol{x}, \boldsymbol{\xi}) \frac{\partial \phi(\boldsymbol{\xi})}{\partial n} - \phi(\boldsymbol{\xi}) \nabla_{\boldsymbol{x}} \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n} \right) ds(\boldsymbol{\xi})
 \end{aligned} \qquad\text{(2.8)}$$
 
-が得られる。最後の式は境界を $N$ 個の要素 $\Gamma_j$ に分割した場合の離散化表現である。
+**以降の流れ**
 
-　以降では、式 $(2.8)$ に現れる4つの量、すなわち $\nabla_{\boldsymbol{x}} G(\boldsymbol{x}, \boldsymbol{\xi})$, $\nabla_{\boldsymbol{x}} \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n}$, $\phi(\boldsymbol{\xi})$, $\frac{\partial \phi(\boldsymbol{\xi})}{\partial n}$ の計算方法を説明する。前者2つ（基本解の微分）は[節3.1](#31-基本解とその微分の導出)で数学的に導出し、後者2つ（境界上の物理量）は[節3.2](#32-境界積分方程式の離散化)でBEMによる数値的な求め方を説明する。
+　式 $(2.8)$ を用いて速度ベクトルを計算するためには、以下の4つの量を求める必要がある。本稿では、前者2つ（基本解の微分）は数学的に導出し、後者2つ（境界上の物理量）はBEMによる数値計算で求める。
+
+| 量 | 説明 | 解説箇所 |
+|:-:|:--|:--|
+| $\nabla_{\boldsymbol{x}} G(\boldsymbol{x}, \boldsymbol{\xi})$ | 基本解の勾配 | [節3.1](#31-基本解とその微分の導出) |
+| $\nabla_{\boldsymbol{x}} \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n}$ | 基本解の法線微分の勾配 | [節3.1](#31-基本解とその微分の導出) |
+| $\phi(\boldsymbol{\xi})$ | 境界上のポテンシャル | [節3.2](#32-境界積分方程式の離散化) |
+| $\frac{\partial \phi(\boldsymbol{\xi})}{\partial n}$ | 境界上の法線方向流速 | [節3.2](#32-境界積分方程式の離散化) |
 
 <!-- 疑問点: 上の計算は3次元においても成り立つか. 少なくとも、式(2.5)は異なるようである -->
 
@@ -173,15 +191,11 @@ $$\begin{aligned}
 
 　前述の通り、2次元ラプラス方程式の基本解は式 $(2.5)$ で与えられる。式 $(2.8)$ から、速度ベクトル $\boldsymbol{v}(\boldsymbol{x})$ を計算するためには、基本解の $\boldsymbol{x}$ に関する勾配 $\nabla_{\boldsymbol{x}} G(\boldsymbol{x}, \boldsymbol{\xi})$ と、基本解の法線方向微分の $\boldsymbol{x}$ に関する勾配 $\nabla_{\boldsymbol{x}} \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n}$ を求める必要がある。
 
-　まず、基本解の勾配を求める. $\boldsymbol{\xi} = (\xi_x, \xi_y)$ とすれば $\boldsymbol{r} = (\xi_x - x, \xi_y - y)$, $r = \sqrt{(\xi_x - x)^2 + (\xi_y - y)^2}$ となるから, $r$ の $\boldsymbol{x}$ に関する勾配は以下のようになる。
+　まず, $r$ の $\boldsymbol{x}, \boldsymbol{\xi}$ に関する勾配は以下のように展開される。計算の詳細は[補遺A](#a-eq31)を参照されたい。
 
-$$\begin{aligned}
-    \nabla_{\boldsymbol{x}} r &= \left( \frac{\partial r}{\partial x}, \frac{\partial r}{\partial y} \right) \\\
-    &= \left( \frac{-(\xi_x - x)}{r}, \frac{-(\xi_y - y)}{r} \right) \\\
-    &= -\frac{\boldsymbol{r}}{r}
-\end{aligned} \qquad\text{(3.1)}$$
+$$\nabla_{\boldsymbol{x}} r = -\frac{\boldsymbol{r}}{r}, \quad \nabla_{\boldsymbol{\xi}} r = \frac{\boldsymbol{r}}{r} \qquad\text{(3.1)}$$
 
-　したがって, $\nabla_{\boldsymbol{x}} G(\boldsymbol{x}, \boldsymbol{\xi})$ は以下のように求められる。
+　これを代入すると、基本解の $\boldsymbol{x}$ に関する勾配 $\nabla_{\boldsymbol{x}} G(\boldsymbol{x}, \boldsymbol{\xi})$、および基本解の法線方向微分 $\frac{\partial G}{\partial n}$ は以下のようになる。
 
 $$\begin{aligned}
     \nabla_{\boldsymbol{x}} G(\boldsymbol{x}, \boldsymbol{\xi}) &= -\frac{1}{2\pi} \nabla_{\boldsymbol{x}} \ln r \\\
@@ -190,48 +204,55 @@ $$\begin{aligned}
     &= \frac{1}{2\pi r^2} \boldsymbol{r}
 \end{aligned} \qquad\text{(3.2)}$$
 
-　次に、基本解の法線方向微分の $\boldsymbol{x}$ に関する勾配を求める。まず, $r$ の $\boldsymbol{\xi}$ に関する勾配は以下のようになる。
-
-$$\begin{aligned}
-    \nabla_{\boldsymbol{\xi}} r &= \left( \frac{\partial r}{\partial \xi_x}, \frac{\partial r}{\partial \xi_y} \right) \\\
-    &= \left( \frac{\xi_x - x}{r}, \frac{\xi_y - y}{r} \right) \\\
-    &= \frac{\boldsymbol{r}}{r}
-\end{aligned} \qquad\text{(3.3)}$$
-
-したがって、点 $\boldsymbol{\xi}$ における法線ベクトルを $\boldsymbol{n} = (n_x, n_y)$ としたときの法線微分 $\frac{\partial G}{\partial n}$ は、次のように表される。
-
 $$\begin{aligned}
     \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n} &= \nabla_{\boldsymbol{\xi}} G(\boldsymbol{x}, \boldsymbol{\xi}) \cdot \boldsymbol{n} \\\
     &= \left(-\frac{1}{2\pi} \cdot \frac{1}{r} \nabla_{\boldsymbol{\xi}} r\right) \cdot \boldsymbol{n} \\\
     &= \left(-\frac{1}{2\pi} \cdot \frac{1}{r} \cdot \frac{\boldsymbol{r}}{r}\right) \cdot \boldsymbol{n} \\\
     &= -\frac{\boldsymbol{r} \cdot \boldsymbol{n}}{2\pi r^2}
-\end{aligned} \qquad\text{(3.4)}$$
+\end{aligned} \qquad\text{(3.3)}$$
 
 　次に、このスカラー量を $\boldsymbol{x}$ で微分する。商の微分公式を用いると、
 
-$$\nabla_{\boldsymbol{x}} \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n} = -\frac{1}{2\pi} \frac{r^2 \nabla_{\boldsymbol{x}} (\boldsymbol{r} \cdot \boldsymbol{n}) - (\boldsymbol{r} \cdot \boldsymbol{n}) \nabla_{\boldsymbol{x}} (r^2)}{r^4} \qquad\text{(3.5)}$$
-となる。ここで, $\nabla_{\boldsymbol{x}} (\boldsymbol{r} \cdot \boldsymbol{n}) = \nabla_{\boldsymbol{x}} ((\xi_x - x) n_x + (\xi_y - y) n_y) = -\boldsymbol{n}$ であり, $\nabla_{\boldsymbol{x}} (r^2) = \nabla_{\boldsymbol{x}} ((\xi_x - x)^2 + (\xi_y - y)^2) = -2\boldsymbol{r}$ である。これらを式 $(3.5)$ に代入すると、式 $(3.6)$ が得られる。
+$$\nabla_{\boldsymbol{x}} \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n} = -\frac{1}{2\pi} \frac{r^2 \nabla_{\boldsymbol{x}} (\boldsymbol{r} \cdot \boldsymbol{n}) - (\boldsymbol{r} \cdot \boldsymbol{n}) \nabla_{\boldsymbol{x}} (r^2)}{r^4} \qquad\text{(3.4)}$$
+
+となる。ここで、
+
+$$\nabla_{\boldsymbol{x}} (\boldsymbol{r} \cdot \boldsymbol{n}) = -\boldsymbol{n}, \quad \nabla_{\boldsymbol{x}} (r^2) = -2\boldsymbol{r} \quad\text{(3.5)}$$
+
+である（[補遺A](#a-eq35)）。これらを式 $(3.4)$ に代入することで、式 $(3.6)$ が得られます。
 
 $$\begin{aligned}
     \nabla_{\boldsymbol{x}} \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n} &= -\frac{1}{2\pi} \frac{r^2 (-\boldsymbol{n}) - (\boldsymbol{r} \cdot \boldsymbol{n}) (-2\boldsymbol{r})}{r^4} \\\
     &= \frac{1}{2\pi r^2} \left( \boldsymbol{n} - \frac{2 (\boldsymbol{r} \cdot \boldsymbol{n})}{r^2} \boldsymbol{r} \right)
 \end{aligned} \qquad\text{(3.6)}$$
 
-　このとき、式 $(2.5)$, 式 $(3.4)$ を利用すると、内部点 $\boldsymbol{x}$ におけるポテンシャル値 $\phi(\boldsymbol{x})$ の式 $(2.6)$ は以下のように書ける。詳細な計算は[補遺A](#a-eq37)を参照のこと。
+　このとき、式 $(2.5)$, 式 $(3.3)$ を利用すると、内部点 $\boldsymbol{x}$ におけるポテンシャル値 $\phi(\boldsymbol{x})$ の式 $(2.6)$ は以下のように書ける。詳細な計算は[補遺A](#a-eq37)を参照のこと。
 
 $$c(\boldsymbol{x})\phi(\boldsymbol{x}) = \frac{1}{2\pi}\sum_{j=1}^{N}\left(-q_j \left( \frac{s_2}{2} \ln r_2^2 - \frac{s_1}{2} \ln r_1^2 - (s_2 - s_1) \right) + (\phi_j - q_j d) \Delta\theta_j \right) \qquad\text{(3.7)}$$
 
-ここで、点 $\boldsymbol{x}$ から線分要素 $\Gamma_j$ の各端点へ向かうベクトルを $\boldsymbol{r}_1, \boldsymbol{r}_2$ とし、その大きさを $r_1 = \|\boldsymbol{r}_1\|, r_2 = \|\boldsymbol{r}_2\|$ と表す。また、線分要素 $\Gamma_j$ における単位接線ベクトルを $\boldsymbol{t}$ としたとき, $s_i = \boldsymbol{r}_i \cdot \boldsymbol{t},\ d = \boldsymbol{r}_i \cdot \boldsymbol{n} \ (i = 1, 2)$ である。さらに, $\Delta \theta_j$ は点 $\boldsymbol{x}$ から見た線分要素 $\Gamma_j$ の両端点に対する角度差であり, $\Delta\theta_j = \arctan \frac{s_2}{d} - \arctan \frac{s_1}{d}$ として定義される。
+ここで、各記号は以下のように定義される：
+
+- $\boldsymbol{r}_i, r_i \ (i = 1, 2)$：点 $\boldsymbol{x}$ から線分要素 $\Gamma_j$ の各端点へ向かうベクトルとその大きさ
+- $\boldsymbol{t}$：線分要素 $\Gamma_j$ における単位接線ベクトル
+- $s_i = \boldsymbol{r}_i \cdot \boldsymbol{t} \ (i = 1, 2)$：各端点への相対ベクトルの接線方向成分
+- $d = \boldsymbol{r}_i \cdot \boldsymbol{n} \ (i = 1, 2)$：観測点から線分要素への符号付最短距離
+- $\Delta \theta_j = \arctan \frac{s_2}{d} - \arctan \frac{s_1}{d}$：点 $\boldsymbol{x}$ から見た線分要素 $\Gamma_j$ の両端点に対する角度差
 
 > プログラム上では、角度差 $\Delta \theta_j$ は `arctan2` 関数を用いて計算され, $(-\pi, \pi]$ の範囲に正規化される。
 
 ### 3.2 境界積分方程式の離散化
 
-　本節では、境界積分方程式 $(2.6)$ を離散化し、連立一次方程式 $A\mathbf{x} = \mathbf{b}$ の形に変換する手順を説明する。本稿では、閉曲線 $\Gamma$ を $N$ 個の線分要素 $\Gamma_j \ (j = 1, 2, \ldots, N)$ に分割し、各要素 $\Gamma_j$ 上でポテンシャル $\phi$ と流速 $q = \partial \phi / \partial n$ を一定と仮定する。これにより、境界上の未知量を有限個の値で近似できる。
+　本節では、境界積分方程式 $(2.6)$ を離散化し、連立一次方程式 $A\mathbf{x} = \mathbf{b}$ の形に変換する手順を説明する。
+
+　図3.1のように、閉曲線 $\Gamma$ を $N$ 個の線分要素 $\Gamma_j \ (j = 1, 2, \ldots, N)$ に分割し、各要素 $\Gamma_j$ 上でポテンシャル $\phi$ と流速 $q = \partial \phi / \partial n$ を一定と仮定する。この仮定により、境界上の未知量を有限個の値で近似できる。
 
 $$\phi(\boldsymbol{\xi}) \approx \phi_j, \quad \frac{\partial \phi}{\partial n}(\boldsymbol{\xi}) = q(\boldsymbol{\xi}) \approx q_j, \quad \left( \boldsymbol{\xi} \in \Gamma_j \right) \qquad\text{(3.8)}$$
 
-　以降、各要素の中点を $\boldsymbol{\xi}_j$、各要素の長さを $l_j$ と表す。中点 $\boldsymbol{\xi}_j$ における境界積分方程式 $(2.6)$ は, $\phi$ の項を左側に, $q$ の項を右側に移項すると以下のように書ける。
+<img src="img/discretized_boundary.svg" alt="Discretized Boundary" width="600"/>
+
+**図 3.1** : 境界の離散化. 外部の線分要素を $N_1$ 個、内部の線分要素を $N_2$ 個に分割している例 ($N = N_1 + N_2$)
+
+　各要素の中点を $\boldsymbol{\xi}_j$、長さを $l_j$ と表す。中点 $\boldsymbol{\xi}_i$ における境界積分方程式 $(2.6)$ を離散化すると、以下のように変形できる。ここで、$\phi$ の項を左辺に、$q$ の項を右辺に移項している。
 
 $$\begin{aligned}
     &\quad c(\boldsymbol{\xi}_i) \phi(\boldsymbol{\xi}_i) + \oint_{\Gamma} \phi(\boldsymbol{\xi}) \frac{\partial G(\boldsymbol{\xi}_i, \boldsymbol{\xi})}{\partial n} ds(\boldsymbol{\xi}) = \oint_{\Gamma} G(\boldsymbol{\xi}_i, \boldsymbol{\xi}) q(\boldsymbol{\xi}) ds(\boldsymbol{\xi}) \\\
@@ -239,7 +260,7 @@ $$\begin{aligned}
     &\Rightarrow \sum_{j=1}^{N} H_{ij} \phi_j = \sum_{j=1}^{N} G_{ij} q_j
 \end{aligned} \qquad\text{(3.9)}$$
 
-ここで、行列要素 $H_{ij}$ と $G_{ij}$ は、クロネッカーのデルタ $\delta_{ij}$ を用いて以下のように定義される。この計算の詳細は、[補遺A](#a-eq310)を参照されたい。
+ただし、行列要素 $H_{ij}$ と $G_{ij}$ は、クロネッカーのデルタ $\delta_{ij}$ を用いて以下のように定義される。この計算の詳細は、[補遺A](#a-eq310)を参照されたい。
 
 $$\begin{aligned}
     H_{ij} &= \int_{\Gamma_j} \frac{\partial G(\boldsymbol{\xi}_i, \boldsymbol{\xi})}{\partial n} ds(\boldsymbol{\xi}) + \delta_{ij} c(\boldsymbol{\xi}_i) \\\
@@ -248,9 +269,9 @@ $$\begin{aligned}
     &= \int_{\Gamma_j} \left( -\frac{1}{2\pi} \ln r \right) ds(\boldsymbol{\xi})
 \end{aligned} \qquad\text{(3.10)}$$
 
-> ただし、前述のように線分として境界を近似しているため、境界上の点 $\boldsymbol{\xi} _j$ について位置ベクトル $\boldsymbol{r}$ と法線ベクトル $\boldsymbol{n}$ は直交する。したがって, $\boldsymbol{r} \cdot \boldsymbol{n} = 0$ となるから, $H _{ii} = c(\boldsymbol{\xi}_i) = 1/2$ となる。
+> **対角項 $H_{ii}$ について**：前述のように線分として境界を近似しているため、境界上の点 $\boldsymbol{\xi} _j$ について位置ベクトル $\boldsymbol{r}$ と法線ベクトル $\boldsymbol{n}$ は直交する。したがって, $\boldsymbol{r} \cdot \boldsymbol{n} = 0$ となるから, $H _{ii} = c(\boldsymbol{\xi}_i) = 1/2$ となる。
 
-　式 $(3.9)$ は, $i = 1, 2, \ldots, N$ について連立させることで、以下の行列方程式として表される。
+　式 $(3.9)$ は, $i = 1, 2, \ldots, N$ について連立させると、以下の行列方程式が得られる。
 
 $$\begin{bmatrix}
     H_{11} & H_{12} & \cdots & H_{1N} \\\
@@ -271,11 +292,17 @@ $$\begin{bmatrix}
     q_1 \\\ q_2 \\\ \vdots \\\ q_N
 \end{bmatrix} \qquad\text{(3.11)}$$
 
-　[節2.2](#22-境界条件の設定)で説明したように、各要素 $\Gamma_j$ において, $\phi_j$ または $q_j$ のどちらかが指定されるため、式 $(3.11)$ は未知量に関する連立一次方程式として解くことができる。このとき、既知の値を右辺にベクトル $\mathbf{b}$ としてまとめ、未知量を左辺にベクトル $\mathbf{x}$ としてまとめることで、以下の形に変換できる。
+　[節2.2](#22-境界条件の設定)で説明したように、各要素 $\Gamma_j$ において, $\phi_j$ または $q_j$ のどちらかが指定されるため、式 $(3.11)$ は未知量に関する連立一次方程式として解くことができる。具体的には、既知の値を右辺ベクトル $\mathbf{b}$ にまとめ、未知量を左辺ベクトル $\mathbf{x}$ にまとめることで、以下の形に変換できる。
 
 $$A \mathbf{x} = \mathbf{b} \qquad\text{(3.12)}$$
 
-**具体例**：境界 $\Gamma$ が4つの要素 $\Gamma_1, \Gamma_2, \Gamma_3, \Gamma_4$ に分割されており, $\Gamma_1$ と $\Gamma_3$ でポテンシャル $\phi$ が指定され, $\Gamma_2$ と $\Gamma_4$ で流速 $q$ が指定されている場合を考える。このとき、式 $(3.11)$ から、以下のように連立方程式を構築できる。ただし、区別のため、既知の変数には添え字 "k" を付ける。また, $H_{ij}$ と $G_{ij}$ については、いずれも既に計算されているものとする。
+**具体例（台形領域での設定）**：境界 $\Gamma$ が4つの要素 $\Gamma_1, \Gamma_2, \Gamma_3, \Gamma_4$ に分割されており, $\Gamma_1$ と $\Gamma_3$ でポテンシャル $\phi$ が指定され（ディクリレ条件）, $\Gamma_2$ と $\Gamma_4$ で流速 $q$ が指定されている（ノイマン条件）場合を考える。
+
+<img src="img/boundary_integral_eq_example.svg" alt="Trapezoidal Boundary Example" width="400"/>
+
+**図 3.1** : 台形領域における各線分要素の境界条件の設定例
+
+　このとき、式 $(3.11)$ は以下のように変形できる。ここで、区別のために既知の変数には添え字 "k" を付ける。また, $H_{ij}$ と $G_{ij}$ については、いずれも既知である。
 
 $$\begin{bmatrix}
   H_{11} & H_{12} & H_{13} & H_{14} \\\
@@ -296,6 +323,8 @@ $$\begin{bmatrix}
   q_1 \\\ q_{2,k} \\\ q_3 \\\ q_{4,k}
 \end{bmatrix}$$
 
+　既知の値を右辺に移項し、未知量を左辺にまとめると、式 $(3.12)$ の形に変形できる。
+
 $$\Rightarrow \begin{bmatrix}
     -G_{11} & H_{12} & -G_{13} & H_{14} \\\
     -G_{21} & H_{22} & -G_{23} & H_{24} \\\
@@ -310,17 +339,17 @@ $$\Rightarrow \begin{bmatrix}
     - H_{41} \phi_{1,k} + G_{42} q_{2,k} - H_{43} \phi_{3,k} + G_{44} q_{4,k}
 \end{bmatrix} \qquad\text{(3.13)}$$
 
-　この例は一般に、四角形領域の2辺 ($\Gamma_1, \Gamma_3$) を開口部、残りの2辺 ($\Gamma_2, \Gamma_4$) を壁面として設定した場合に対応する（図 3.1）。このとき $q_{2,k} = q_{4,k} = 0$ に設定され、また例えば $\phi_{1,k} = 0$ および $\phi_{3,k} > 0$ に設定される。このように設定された連立方程式を解くことで、線分 $\Gamma_1$ から線分 $\Gamma_4$ へ向かう流れが計算される。
+　一般に、壁面では $q_{2,k} = q_{4,k} = 0$ とし、開口部では例えば $\phi_{1,k} = 0$（入口）、$\phi_{3,k} > 0$（出口）と設定する。この連立方程式を解くことで、辺 $\Gamma_1$ から $\Gamma_3$ へ向かう流れが得られる。
 
-<img src="img/boundary_integral_eq_example.svg" alt="Trapezoidal Boundary Example" width="400"/>
-
-**図 3.1** : 台形領域における各線分要素の境界条件の設定例
-
-> 上のように1辺を1つの線分要素 $\Gamma_j$ として設定する場合、往々にして一辺が長くなるため、計算精度が低下する。より高い精度を得るためには、各辺を複数の線分要素に分割することが望ましい。プログラムでは、境界条件設定時に最大の線分長さを指定することで、自動的に要素分割を行っている。この場合、形状指定で与えた線分の数よりも、実際に使用される線分要素 $\Gamma_j$ の数は多くなる可能性がある。
+> **要素分割について**：上の例のように1辺を1つの線分要素として設定すると、辺が長い場合に計算精度が低下することがある。より高い精度を得るためには、各辺を複数の線分要素に分割することが望ましい。本プログラムでは、境界条件設定時に最大の線分長さ (`BoundaryConditions`コンストラクタの`max_length`引数) に基づき、自動的に要素分割を行っている。そのため、形状定義で与えた線分の数よりも、実際に使用される線分要素の数が多くなる場合がある。
 
 ### 3.3 内部点での速度ベクトルの計算
 
-　境界上の未知量 $\phi_j$ と $q_j$ が求まれば、式 $(2.8)$ を用いて、任意の内部点 $\boldsymbol{x}$ における速度ベクトル $\boldsymbol{v}(\boldsymbol{x})$ を計算できる。具体的には、式 $(3.2)$ と式 $(3.6)$ を式 $(2.8)$ に代入することで、以下のように表される。
+　前節で境界上の未知量 $\phi_j$ と $q_j$ が求まった。本節では、これらの値を用いて、任意の内部点 $\boldsymbol{x}$ における速度ベクトル $\boldsymbol{v}(\boldsymbol{x})$ を計算する方法を説明する。
+
+**速度ベクトルの導出**
+
+　式 $(2.8)$ に、基本解の勾配 $(3.2)$ と基本解の法線微分の勾配 $(3.6)$ を代入すると、速度ベクトルは以下のように表される。
 
 $$\begin{aligned}
     \boldsymbol{v}(\boldsymbol{x}) &= \sum_{j=1}^{N} \int_{\Gamma_j} \left( \nabla_{\boldsymbol{x}} G(\boldsymbol{x}, \boldsymbol{\xi}) \frac{\partial \phi(\boldsymbol{\xi})}{\partial n} - \phi(\boldsymbol{\xi}) \nabla_{\boldsymbol{x}} \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n} \right) ds(\boldsymbol{\xi}) \\\
@@ -328,7 +357,9 @@ $$\begin{aligned}
     &= \frac{1}{2\pi} \sum_{j=1}^{N} \left( q_j \int_{\Gamma_j} \frac{\boldsymbol{r}}{r^2} ds(\boldsymbol{\xi}) - \phi_j \int_{\Gamma_j} \frac{1}{r^2} \left( \boldsymbol{n} - \frac{2 (\boldsymbol{r} \cdot \boldsymbol{n})}{r^2} \boldsymbol{r} \right) ds(\boldsymbol{\xi}) \right)
 \end{aligned} \qquad\text{(3.13)}$$
 
-　したがって、速度ベクトル $\boldsymbol{v}(\boldsymbol{x})$ は、上の式に現れる2つの積分を計算することで求められる。線分要素 $\Gamma_j$ の単位接線ベクトルを $\boldsymbol{t}$, 単位法線ベクトルを $\boldsymbol{n}$, 要素の両端点へのベクトルを $\boldsymbol{r}_1, \boldsymbol{r}_2$ と表す。これらを用いて、上の2つの積分は以下のように計算できる。導出の詳細は、[補遺A](#a-eq315)を参照されたい。
+**積分の解析的評価**
+
+　式 $(3.13)$ に現れる2つの積分は、解析的に計算することが可能である。したがって、速度ベクトルは以下のように表される。導出の詳細については、[補遺A](#a-eq315)を参照されたい。
 
 $$\boldsymbol{v}(\boldsymbol{x}) = \frac{1}{2\pi} \sum_{j=1}^{N} \left( \left( q_j \ln \frac{r_2}{r_1} - \phi_j \left( \frac{d}{r_2^2} - \frac{d}{r_1^2} \right) \right) \boldsymbol{t} + \left( q_j (\theta_2 - \theta_1) - \phi_j \left( -\frac{s_2}{r_2^2} + \frac{s_1}{r_1^2} \right) \right) \boldsymbol{n} \right) \qquad\text{(3.15)}$$
 
@@ -348,9 +379,63 @@ $$\boldsymbol{v}(\boldsymbol{x}) = \frac{1}{2\pi} \sum_{j=1}^{N} \left( \left( q
 
 　本節では、本文で述べた一部の式について、これを整理・導出する過程を示す。
 
+#### A-Eq3.1
+
+　観測点 $\boldsymbol{x}$ と境界上の点 $\boldsymbol{\xi}$ に関する相対ベクトルは $\boldsymbol{r} = \boldsymbol{\xi} - \boldsymbol{x}$ である。本節では, $r = \|\boldsymbol{r}\|$ の $\boldsymbol{x}$ および $\boldsymbol{\xi}$ に関する勾配を求める。
+
+**2次元の場合**
+
+　 $\boldsymbol{x} = (x, y)$, $\boldsymbol{\xi} = (\xi_x, \xi_y)$ とすれば $\boldsymbol{r} = (\xi_x - x, \xi_y - y)$, $r = \sqrt{(\xi_x - x)^2 + (\xi_y - y)^2}$ となるので, $r$ の $\boldsymbol{x}, \boldsymbol{\xi}$ に関する勾配は以下のように求められる。
+
+$$\begin{aligned}
+    \nabla_{\boldsymbol{x}} r &= \left( \frac{\partial r}{\partial x}, \frac{\partial r}{\partial y} \right) \\\
+    &= \left( \frac{-(\xi_x - x)}{r}, \frac{-(\xi_y - y)}{r} \right) \\\
+    &= -\frac{\boldsymbol{r}}{r}
+\end{aligned} \qquad\text{(A31-1)}$$
+
+$$\begin{aligned}
+    \nabla_{\boldsymbol{\xi}} r &= \left( \frac{\partial r}{\partial \xi_x}, \frac{\partial r}{\partial \xi_y} \right) \\\
+    &= \left( \frac{\xi_x - x}{r}, \frac{\xi_y - y}{r} \right) \\\
+    &= \frac{\boldsymbol{r}}{r}
+\end{aligned} \qquad\text{(A31-2)}$$
+
+**3次元の場合**
+
+　 $\boldsymbol{x} = (x, y, z)$, $\boldsymbol{\xi} = (\xi_x, \xi_y, \xi_z)$ とすれば $\boldsymbol{r} = (\xi_x - x, \xi_y - y, \xi_z - z)$, $r = \sqrt{(\xi_x - x)^2 + (\xi_y - y)^2 + (\xi_z - z)^2}$ となるから, $r$ の $\boldsymbol{x}, \boldsymbol{\xi}$ に関する勾配は以下のように求められる。
+
+$$\begin{aligned}
+    \nabla_{\boldsymbol{x}} r &= \left( \frac{\partial r}{\partial x}, \frac{\partial r}{\partial y}, \frac{\partial r}{\partial z} \right) \\\
+    &= \left( \frac{-(\xi_x - x)}{r}, \frac{-(\xi_y - y)}{r}, \frac{-(\xi_z - z)}{r} \right) \\\
+    &= -\frac{\boldsymbol{r}}{r}
+\end{aligned} \qquad\text{(A31-3)}$$
+
+$$\begin{aligned}
+    \nabla_{\boldsymbol{\xi}} r &= \left( \frac{\partial r}{\partial \xi_x}, \frac{\partial r}{\partial \xi_y}, \frac{\partial r}{\partial \xi_z} \right) \\\
+    &= \left( \frac{\xi_x - x}{r}, \frac{\xi_y - y}{r}, \frac{\xi_z - z}{r} \right) \\\
+    &= \frac{\boldsymbol{r}}{r}
+\end{aligned} \qquad\text{(A31-4)}$$
+
+#### A-Eq3.5
+
+　式 $(3.6)$ で使用する, $\nabla_{\boldsymbol{x}} (\boldsymbol{r} \cdot \boldsymbol{n})$ と $\nabla_{\boldsymbol{x}} (r^2)$ を求める。
+
+**2次元の場合**
+
+$$\begin{aligned}
+    \nabla_{\boldsymbol{x}} (\boldsymbol{r} \cdot \boldsymbol{n}) &= \nabla_{\boldsymbol{x}} ((\xi_x - x) n_x + (\xi_y - y) n_y) = -\boldsymbol{n} \\\
+    \nabla_{\boldsymbol{x}} (r^2) &= \nabla_{\boldsymbol{x}} ((\xi_x - x)^2 + (\xi_y - y)^2) = -2\boldsymbol{r}
+\end{aligned} \qquad\text{(A35-1)}$$
+
+**3次元の場合**
+
+$$\begin{aligned}
+    \nabla_{\boldsymbol{x}} (\boldsymbol{r} \cdot \boldsymbol{n}) &= \nabla_{\boldsymbol{x}} ((\xi_x - x) n_x + (\xi_y - y) n_y + (\xi_z - z) n_z) = -\boldsymbol{n} \\\
+    \nabla_{\boldsymbol{x}} (r^2) &= \nabla_{\boldsymbol{x}} ((\xi_x - x)^2 + (\xi_y - y)^2 + (\xi_z - z)^2) = -2\boldsymbol{r}
+\end{aligned} \qquad\text{(A35-2)}$$
+
 #### A-Eq3.7
 
-　式 $(2.6)$ を展開する。式 $(2.5)$, 式 $(3.4)$ を代入すると、以下のようになる。
+　式 $(2.6)$ を展開する。式 $(2.5)$, 式 $(3.3)$ を代入すると、以下のようになる。
 
 $$\begin{aligned}
     c(\boldsymbol{x}) \phi(\boldsymbol{x}) &= \oint_{\Gamma} \left(G(\boldsymbol{x}, \boldsymbol{\xi}) \frac{\partial \phi(\boldsymbol{\xi})}{\partial n} - \phi(\boldsymbol{\xi}) \frac{\partial G(\boldsymbol{x}, \boldsymbol{\xi})}{\partial n} \right) ds(\boldsymbol{\xi}) \\\
